@@ -58,14 +58,15 @@ modao-recent-tabs-plugin/
 │   ├── tabbar.js             #   标签栏组件（RecentTabsBar）
 │   ├── preload-inject.js     #   preload 注入片段
 │   └── recent-tabs-bootstrap.js  # 画布数据 + 交互逻辑
-└── tools/                    # 排障工具（可选）
-    ├── sniffer-canvas-item.js    # 输出指定画布项 DOM 结构，排查「某画布不显示」
-    └── sniffer-canvas-dom.js     # 探查左侧画布栏 DOM 结构
+└── sniffer-canvas-*.js       # 排障工具（可选，位于仓库根目录）
+    ├── sniffer-canvas-item.js    #   输出指定画布项 DOM 结构，排查「某画布不显示」
+    ├── sniffer-canvas-dom.js     #   探查左侧画布栏 DOM 结构
+    └── sniffer-console.js        #   控制台排障输出
 ```
 
-## 排障工具（tools/）
-- **某画布点了不显示**：浏览器打开该设计文件 → F12 → Console → 粘贴 `tools/sniffer-canvas-item.js` 全部内容回车，把输出发给维护者定位。
-- **想了解左侧画布栏结构**：同理运行 `tools/sniffer-canvas-dom.js`。
+## 排障工具
+- **某画布点了不显示**：浏览器打开该设计文件 → F12 → Console → 粘贴 `sniffer-canvas-item.js`（仓库根目录）全部内容回车，把输出发给维护者定位。
+- **想了解左侧画布栏结构**：同理运行 `sniffer-canvas-dom.js`。
 
 ## 注意事项
 - 本插件只改桌面客户端本地 `app.asar`，**不改内网服务器**。
