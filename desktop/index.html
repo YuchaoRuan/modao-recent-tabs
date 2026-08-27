@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>墨刀最近画布标签栏 · UI 演示</title>
+  <link rel="stylesheet" href="../tabbar.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #e9ebf0; color: var(--md-color-text); }
+    #demo-frame { max-width: 1180px; margin: 24px auto; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 8px 30px rgba(31,35,41,.12); }
+    .modao-app-header { height: 48px; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: #fff; border-bottom: 1px solid var(--md-color-border); }
+    .modao-logo { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--md-color-primary); }
+    .modao-logo .mark { width: 22px; height: 22px; border-radius: 6px; background: var(--md-color-primary); display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 800; }
+    .modao-workspace { color: var(--md-color-text-secondary); font-size: 13px; }
+    .modao-nav { display: flex; gap: 4px; margin-left: 8px; }
+    .modao-nav span { padding: 5px 12px; border-radius: 6px; font-size: 13px; color: var(--md-color-text-secondary); cursor: pointer; }
+    .modao-nav span.active { background: var(--md-color-primary-soft); color: var(--md-color-primary); font-weight: 600; }
+    .modao-avatar { margin-left: auto; width: 28px; height: 28px; border-radius: 50%; background: var(--md-color-primary); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+    #demo-frame .md-recent-tabs { position: static; box-shadow: none; border-bottom: 1px solid var(--md-color-border); }
+    .demo-canvas { height: 420px; padding: 28px; background: radial-gradient(circle at 1px 1px, rgba(31,35,41,.05) 1px, transparent 0); background-size: 22px 22px; background-color: var(--md-color-surface); }
+    .demo-canvas h2 { margin: 0 0 6px; font-size: 20px; }
+    .demo-canvas .meta { color: var(--md-color-text-secondary); font-size: 13px; margin-bottom: 18px; }
+    .demo-canvas .placeholder { border: 1.5px dashed var(--md-color-border-strong); border-radius: 10px; height: 300px; display: flex; align-items: center; justify-content: center; color: var(--md-color-text-tertiary); font-size: 14px; }
+    .demo-panel { max-width: 1180px; margin: 0 auto 32px; background: #fff; border: 1px solid var(--md-color-border); border-radius: 10px; padding: 16px 18px; font-size: 13px; color: var(--md-color-text-secondary); }
+    .demo-panel h3 { margin: 0 0 10px; font-size: 14px; color: var(--md-color-text); }
+    .demo-panel code { background: var(--md-color-primary-soft); color: var(--md-color-primary); padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="demo-frame">
+    <div class="modao-app-header">
+      <div class="modao-logo"><span class="mark">墨</span>墨刀</div>
+      <div class="modao-workspace">内网 · http://10.83.117.101:9080</div>
+      <div class="modao-nav"><span class="active">原型</span><span>设计</span><span>白板</span><span>文档</span></div>
+      <div class="modao-avatar">M</div>
+    </div>
+    <div id="md-recent-tabs-root"></div>
+    <div class="demo-canvas">
+      <h2 id="cv-title">请选择上方标签打开画布</h2>
+      <div class="meta" id="cv-meta">点击顶部“最近画布”中的任一标签，即可在此快速切换查看。</div>
+      <div class="placeholder" id="cv-body">画布预览区</div>
+    </div>
+  </div>
+
+  <div class="demo-panel">
+    <h3>说明</h3>
+    <div class="note">
+      此为<strong>纯 UI 演示</strong>，展示演示数据。真实环境中，浏览器扩展与桌面注入会从
+      <code>localStorage</code> 最近画布记录 + 左侧画布栏 DOM 读取数据（无需配置接口），
+      本演示与扩展/桌面共用同一套 <code>tabbar.js</code> / <code>tabbar.css</code>。
+    </div>
+  </div>
+
+  <script src="../tabbar.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      var removed = JSON.parse(localStorage.getItem("md_demo_removed") || "[]");
+      var root = document.getElementById("md-recent-tabs-root");
+      var titleEl = document.getElementById("cv-title");
+      var metaEl = document.getElementById("cv-meta");
+      var bodyEl = document.getElementById("cv-body");
+
+      var bar = new RecentTabsBar(root, {
+        max: 20,
+        onSwitch: function (item) {
+          titleEl.textContent = item.name;
+          metaEl.textContent = "类型：" + item.type + "　更新：" + MD_FORMAT_RELATIVE(item.updatedAt);
+          bodyEl.textContent = "正在查看画布：" + item.name + "（演示预览）";
+          bar.setActive(item.id);
+        },
+        onClose: function (item) {
+          removed.push(item.id);
+          localStorage.setItem("md_demo_removed", JSON.stringify(removed));
+          bar.items = bar.items.filter(function (c) { return c.id !== item.id; });
+          bar.render();
+        },
+        onRefresh: function (done) { loadData(); if (done) setTimeout(done, 300); },
+        onSettings: function () {}
+      });
+
+      // 演示数据（真实环境由 content.js 从 localStorage 最近画布 + 左侧画布栏 DOM 读取）
+      var DEMO_CANVASES = [
+        { id: "cb_demo_1", name: "消息模板管理",    type: "画布", updatedAt: Date.now() - 1000 * 60 * 5 },
+        { id: "cb_demo_2", name: "新增/修改(说明)", type: "画布", updatedAt: Date.now() - 1000 * 60 * 32 },
+        { id: "cb_demo_3", name: "登录页-手机号",   type: "画布", updatedAt: Date.now() - 1000 * 60 * 90 },
+        { id: "cb_demo_4", name: "订单详情-退款",    type: "画布", updatedAt: Date.now() - 1000 * 60 * 200 },
+        { id: "cb_demo_5", name: "首页-Banner配置", type: "画布", updatedAt: Date.now() - 1000 * 60 * 360 }
+      ];
+
+      function loadData() {
+        bar.setBadge("加载中");
+        var items = DEMO_CANVASES.filter(function (c) { return removed.indexOf(c.id) === -1; });
+        bar.setItems(items);
+        bar.setBadge("演示数据");
+      }
+
+      loadData();
+    })();
+  </script>
+</body>
+</html>

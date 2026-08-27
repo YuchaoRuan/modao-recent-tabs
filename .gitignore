@@ -1,0 +1,12 @@
+# 二进制 / 构建产物（通过 GitHub Releases 分发，不进 git 历史）
+*.zip
+*.asar
+*.asar.orig
+*.asar.bak
+*.bak
+desktop/app.asar.patched
+release/
+# 日志 / 调试
+*.log
+modao-debug.log
+.DS_Store

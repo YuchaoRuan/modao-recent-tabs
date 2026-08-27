@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>墨刀最近画布标签栏（内网）· 设置</title>
+  <style>
+    :root { --blue:#2d7ff9; --text:#1f2329; --sub:#646a73; --border:#e5e7eb; --bg:#f7f8fa; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); padding:32px; line-height:1.6; }
+    .card { max-width:620px; margin:0 auto; background:#fff; border:1px solid var(--border); border-radius:10px; padding:24px 28px; }
+    h1 { font-size:18px; margin:0 0 4px; }
+    .desc { color:var(--sub); font-size:13px; margin:0 0 20px; }
+    label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
+    input[type="text"] { width:100%; padding:9px 11px; border:1px solid var(--border); border-radius:6px; font-size:13px; outline:none; }
+    input:focus { border-color:var(--blue); }
+    .row { margin-bottom:18px; }
+    .hint { font-size:12px; color:var(--sub); margin-top:6px; }
+    .actions { display:flex; gap:10px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+    button { border:none; border-radius:6px; padding:9px 16px; font-size:13px; cursor:pointer; }
+    .btn-primary { background:var(--blue); color:#fff; }
+    .btn-ghost { background:#fff; border:1px solid var(--border); color:var(--text); }
+    .status { font-size:13px; margin-left:auto; }
+    .status.ok { color:#1aab5b; }
+    .status.err { color:#f53f3f; }
+    .steps { font-size:13px; color:var(--sub); background:var(--bg); border-radius:8px; padding:12px 14px; margin-top:8px; }
+    .steps b { color:var(--text); }
+    code { background:#eef3ff; color:var(--blue); padding:1px 5px; border-radius:4px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>墨刀最近画布标签栏（内网）· 设置</h1>
+    <p class="desc">内网墨刀（默认 <code>http://10.83.117.101:9080</code>）设计文件页顶部标签栏。画布 = 设计文件内的 screen，与桌面客户端逻辑一致。</p>
+
+    <div class="row">
+      <label for="serverAddr">墨刀服务器地址</label>
+      <input type="text" id="serverAddr" placeholder="http://10.83.117.101:9080" />
+      <div class="hint">填写你的内网墨刀企业版地址（含协议与端口）。修改后，对该地址下的页面，扩展会<b>自动注入</b>标签栏；其他地址的墨刀页可点击工具栏图标手动注入。</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" id="save">保存</button>
+      <button class="btn-ghost" id="clearClosed">清除已关闭标签</button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <div class="steps">
+      <b>使用步骤：</b><br />
+      1. 浏览器打开 <code>chrome://extensions</code>，开启「开发者模式」；<br />
+      2. 点「加载已解压的扩展程序」，选择本插件目录；<br />
+      3. 打开内网墨刀设计文件页，顶部出现「最近画布」标签栏；<br />
+      4. 点标签切换、点 × 关闭（仅本地）、点图钉切换固定/浮动；<br />
+      5. 若服务器地址与默认不同，先在此填写并保存，或直接在墨刀页点工具栏图标注入。
+    </div>
+
+    <div class="steps">
+      <b>说明：</b>所有关闭操作只移除本地标签，<b>不修改墨刀里的画布数据</b>。「清除已关闭标签」会恢复此前被关闭的画布（需在墨刀设计文件页处于打开状态）。
+    </div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>
