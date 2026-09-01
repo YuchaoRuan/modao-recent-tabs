@@ -1,1 +1,75 @@
-IyDloqjliIDkvIHkuJrniYjjgIzmnIDov5HnlLvluIPjgI3pobbpg6jmoIfnrb7moI/mj5Lku7YKCuWcqOWiqOWIgOS8geS4mueJiCoq5qGM6Z2i5a6i5oi356uvKirnqpflj6Ppobbpg6jvvIzku6XmoIfnrb7pobXlvaLlvI/lsZXnpLrkvaDmnIDov5HmiZPlvIDnmoTnlLvluIPvvIjlvZPliY3orr7orqHmlofku7blhoXvvInvvIzmlK/mjIHlv6vpgJ/liIfmjaLjgIHljZXmoIfnrb7lhbPpl63jgIHlhbPpl63lhbbku5bjgIHnlLvluIPliJfooajkuIvmi4njgILpo47moLzkuI7loqjliIDkuIDoh7TvvIzov5DooYznqLPlrprjgIIKCiMjIOino+WGs+S7gOS5iOmXrumimArloqjliIDmiZPlvIDkuIDkuKrorr7orqHmlofku7blkI7vvIzlt6bkvqfjgIznlLvluIPjgI3moI/ph4zmnInlpJrkuKrnlLvluIPvvIzmnaXlm57liIfmjaLopoHlj43lpI3lnKjliJfooajph4zmib7jgILmnKzmj5Lku7blnKjnqpflj6Ppobbpg6jliqDkuIDmnaHmoIfnrb7moI/vvIzoh6rliqjorrDlvZXkvaDmnIDov5HmiZPlvIDnmoTnlLvluIPvvIzngrnmoIfnrb7ljbPlj6/mnaXlm57liIfmjaLvvIzml6DpnIDph43mlrDmn6Xmib7jgIIKCiMjIOWKn+iDvea4heWNlQotIOmhtumDqOagh+etvuagj+Wxleekuioq5b2T5YmN6K6+6K6h5paH5Lu2KirlhoXmnIDov5HmiZPlvIDnmoTnlLvluIPvvIzmjInmnIDov5Hml7bpl7TmjpLluo8KLSDov5vlhaXmlofku7bml7bpu5jorqTmiZPlvIDnmoTnlLvluIPjgIHku6Xlj4rkvaDngrnov4fnmoTnlLvluIPvvIzpg73kvJroh6rliqjliqDlhaXlubbnva7pobYKLSDngrnmoIfnrb4g4oaSIOWIh+aNouWIsOWvueW6lOeUu+W4g++8m+eCuSDDlyDihpIg5YWz6Zet6K+l5qCH562+77yI5LuF5pys5Zyw77yJCi0g5Y+z5L6n44CM55S75biDIE7jgI3ihpIg54K55Ye75bGV5byA55S75biD5YiX6KGo5LiL5ouJ77yM54K55Lu75oSP6aG55YiH5o2iCi0g5Y+z5L6n44CM5YWz6Zet5YW25LuW44CN4oaSIOWPquS/neeVmeW9k+WJjeeUu+W4g+agh+etvu+8jOWFs+mXreWFtuS9mQotIOWPs+S+p+OAjOWbvumSieOAjeKGkiDliIfmjaLlm7rlrprmmL7npLogLyDmta7liqjmmL7npLrvvIjmta7liqjml7bmoIfnrb7moI/oh6rliqjpmpDol4/vvIzpvKDmoIfnp7vliLDnqpflj6Ppobbpg6jmu5Hlh7rvvIznprvlvIDoh6rliqjmlLbotbfvvIkKLSDlj7PkvqfjgIzkvY3nva7jgI3ihpIg5YiH5o2i5qCH562+5qCP5L2N572u77yI6aG26YOoIC8g5bel5YW35qCP5LiL5pa577yJ77yM5Y2z5pe255Sf5pWI5bm25YaZ5YWl5pys5Zyw5a2Y5YKo77yIbG9jYWxTdG9yYWdlIGBtZF90YWJiYXJfcG9zaXRpb25g77yJCgo+IOaJgOacieWFs+mXreaTjeS9nOWPquenu+mZpOacrOWcsOagh+etvu+8jCoq5LiN5L+u5pS55aKo5YiA6YeM55qE55S75biD5pWw5o2uKirjgIIKCiMjIOS4gOmUruWuieijhe+8iOW8gOeuseWNs+eUqO+8iQoKPiDliY3mj5DvvJrlrqLmiLfnq6/niYjmnKzkuLogKioxLjYuNCoq77yI5a6J6KOF6Lev5b6E5ZCrIGBhcHAtMS42LjRg77yJ44CC6Iul54mI5pys5LiN5ZCM77yM6KeB5LiL5pa544CM5LuO5rqQ56CB6YeN5omT44CN44CCCgoxLiAqKuWujOWFqOmAgOWHuioq5aKo5YiA5LyB5Lia54mI77yI5ZCr5Y+z5LiL6KeS5omY55uY5Zu+5qCH77yJ44CCCjIuIOaKiiBgYXBwLmFzYXIucGF0Y2hlZGAg5ZKMIGBhcHBseS1wYXRjaC5jbWRgIOaUvuWIsCoq5ZCM5LiA5Liq55uu5b2VKirvvIjku7vmhI/kvY3nva7ljbPlj6/vvInjgIIKMy4g5Y+M5Ye7IGBhcHBseS1wYXRjaC5jbWRg77yM6ISa5pys5Lya6Ieq5Yqo5a6M5oiQ77ya5qOA5rWL5a6i5oi356uv5piv5ZCm5Zyo6L+Q6KGMIOKGkiDlpIfku73ljp8gYGFwcC5hc2FyYCDihpIg5pu/5o2i5Li66KGl5LiB54mI44CCCjQuIOmHjeaWsOaJk+W8gOWiqOWIgOS8geS4mueJiO+8jOi/m+WFpeS7u+S4gOiuvuiuoeaWh+S7tu+8jOeql+WPo+mhtumDqOWNs+WHuueOsOOAjOacgOi/keeUu+W4g+OAjeagh+etvuagj+OAggoKIyMg6L+Y5Y6fIC8g5Y246L29Cuabv+aNouWJjeiEmuacrOS8muaKiuWOn+aWh+S7tuWkh+S7veS4uiBgYXBwLmFzYXIuYmFrYO+8iOS4juWOn+aWh+S7tuWQjOebruW9le+8ieOAguimgei/mOWOn++8mumAgOWHuuWuouaIt+err+WQju+8jOeUqCBgYXBwLmFzYXIuYmFrYCDopobnm5blm54gYGFwcC5hc2FyYCDljbPlj6/jgIIKCiMjIOS7jua6kOeggemHjeaJk++8iOWuouaIt+err+WNh+e6pyAvIOeJiOacrOS4jeWQjO+8iQrlrqLmiLfnq6/ljYfnuqfkvJropobnm5YgYGFwcC5hc2FyYO+8jOatpOaXtueUqCBgc3JjL2Ag6YeM55qE5rqQ56CB6YeN5paw5omT6KGl5LiB44CC6ZyA6KaBIE5vZGUuanMg546v5aKD77yI6Ieq5bimIGBucHhg77yJ77yaCgpgYGBiYXNoCiMgMS4g6Kej5YyF5b2T5YmN5a6i5oi356uv55qEIGFwcC5hc2FyCm5weCBAZWxlY3Ryb24vYXNhciBleHRyYWN0IGFwcC5hc2FyIGFwcF91bnBhY2tlZAoKIyAyLiDlpI3liLbmj5Lku7bmlofku7bliLAgcmVzb3VyY2Uv77yI5ZCr5YWx5Lqr5qC45b+D5qih5Z2XIHJlY2VudC10YWJzLWNvcmUuanPvvIkKY3AgZGVza3RvcC90YWJiYXIuY3NzIGRlc2t0b3AvdGFiYmFyLmpzIGRlc2t0b3AvcmVjZW50LXRhYnMtY29yZS5qcyBkZXNrdG9wL3JlY2VudC10YWJzLWJvb3RzdHJhcC5qcyBhcHBfdW5wYWNrZWQvcmVzb3VyY2UvCgojIDMuIOi/veWKoOazqOWFpeeJh+auteWIsCBwcmVsb2FkLmpz77yI5Yqh5b+F5YWI5Yqg5LiA5Liq5o2i6KGM77yJCnByaW50ZiAnXG4nID4+IGFwcF91bnBhY2tlZC9yZXNvdXJjZS9wcmVsb2FkLmpzCmNhdCBkZXNrdG9wL3ByZWxvYWQtaW5qZWN0LmpzID4+IGFwcF91bnBhY2tlZC9yZXNvdXJjZS9wcmVsb2FkLmpzCgojIDQuIOmHjeaWsOaJk+WMhQpucHggQGVsZWN0cm9uL2FzYXIgcGFjayBhcHBfdW5wYWNrZWQgYXBwLmFzYXIucGF0Y2hlZApgYGAKCueEtuWQjuaKiuaWsOeUn+aIkOeahCBgYXBwLmFzYXIucGF0Y2hlZGAg5pu/5o2i5YiwIGByZXNvdXJjZXMvYXBwLmFzYXJg44CCCgojIyDnm67lvZXnu5PmnoQKYGBgCm1vZGFvLXJlY2VudC10YWJzLXBsdWdpbi8K4pSc4pSA4pSAIFJFQURNRS5tZCAgICAgICAgICAgICAgICAgIyDmnKzor7TmmI4K4pSc4pSA4pSAIGFwcC5hc2FyLnBhdGNoZWQgICAgICAgICAgIyDlt7LmiZPlpb3nmoTooaXkuIHljIXvvIjnm7TmjqXmm7/mjaLnlKjvvIkK4pSc4pSA4pSAIGFwcGx5LXBhdGNoLmNtZCAgICAgICAgICAgIyDkuIDplK7mm7/mjaLohJrmnKwK4pSc4pSA4pSAIHNyYy8gICAgICAgICAgICAgICAgICAgICAgIyDmupDnoIHvvIjljYfnuqflkI7ph43miZPnlKjvvIkK4pSCICAg4pSc4pSA4pSAIHRhYmJhci5jc3MgICAgICAgICAgICAjICAg5qCH562+5qCP5qC35byPCuKUgiAgIOKUnOKUgOKUgCB0YWJiYXIuanMgICAgICAgICAgICAgIyAgIOagh+etvuagj+e7hOS7tu+8iFJlY2VudFRhYnNCYXLvvIkK4pSCICAg4pSc4pSA4pSAIHByZWxvYWQtaW5qZWN0LmpzICAgICAjICAgcHJlbG9hZCDms6jlhaXniYfmrrUK4pSCICAg4pSU4pSA4pSAIHJlY2VudC10YWJzLWJvb3RzdHJhcC5qcyAgIyDnlLvluIPmlbDmja4gKyDkuqTkupLpgLvovpEK4pSU4pSA4pSAIHNuaWZmZXItY2FudmFzLSouanMgICAgICAgIyDmjpLpmpzlt6XlhbfvvIjlj6/pgInvvIzkvY3kuo7ku5PlupPmoLnnm67lvZXvvIkKICAgIOKUnOKUgOKUgCBzbmlmZmVyLWNhbnZhcy1pdGVtLmpzICAgICMgICDovpPlh7rmjIflrprnlLvluIPpobkgRE9NIOe7k+aehO+8jOaOkuafpeOAjOafkOeUu+W4g+S4jeaYvuekuuOAjQogICAg4pSc4pSA4pSAIHNuaWZmZXItY2FudmFzLWRvbS5qcyAgICAgIyAgIOaOouafpeW3puS+p+eUu+W4g+agjyBET00g57uT5p6ECiAgICDilJTilIDilIAgc25pZmZlci1jb25zb2xlLmpzICAgICAgICAjICAg5o6n5Yi25Y+w5o6S6Zqc6L6T5Ye6CmBgYAoKIyMg5o6S6Zqc5bel5YW3Ci0gKirmn5DnlLvluIPngrnkuobkuI3mmL7npLoqKu+8mua1j+iniOWZqOaJk+W8gOivpeiuvuiuoeaWh+S7tiDihpIgRjEyIOKGkiBDb25zb2xlIOKGkiDnspjotLQgYHNuaWZmZXItY2FudmFzLWl0ZW0uanNg77yI5LuT5bqT5qC555uu5b2V77yJ5YWo6YOo5YaF5a655Zue6L2m77yM5oqK6L6T5Ye65Y+R57uZ57u05oqk6ICF5a6a5L2N44CCCi0gKirmg7Pkuobop6Plt6bkvqfnlLvluIPmoI/nu5PmnoQqKu+8muWQjOeQhui/kOihjCBgc25pZmZlci1jYW52YXMtZG9tLmpzYOOAggoKIyMg5rOo5oSP5LqL6aG5Ci0g5pys5o+S5Lu25Y+q5pS55qGM6Z2i5a6i5oi356uv5pys5ZywIGBhcHAuYXNhcmDvvIwqKuS4jeaUueWGhee9keacjeWKoeWZqCoq44CCCi0g5YWz6Zet5qCH562+5LuF56e76Zmk5pys5Zyw5qCH562+77yM5LiN5Yig5aKo5YiA55S75biD44CCCi0g6Iul5Zui6Zif5a6i5oi356uv54mI5pys5LiN5pivIDEuNi4077yM55So44CM5LuO5rqQ56CB6YeN5omT44CN55Sf5oiQ5a+55bqU54mI5pys55qE6KGl5LiB5YyF44CCCg==
+# 墨刀企业版「最近画布」顶部标签栏插件
+
+在墨刀企业版**桌面客户端**窗口顶部，以标签页形式展示你最近打开的画布（当前设计文件内），支持快速切换、单标签关闭、关闭其他、画布列表下拉。风格与墨刀一致，运行稳定。
+
+## 解决什么问题
+墨刀打开一个设计文件后，左侧「画布」栏里有多个画布，来回切换要反复在列表里找。本插件在窗口顶部加一条标签栏，自动记录你最近打开的画布，点标签即可来回切换，无需重新查找。
+
+## 功能清单
+- 顶部标签栏展示**当前设计文件**内最近打开的画布，按最近时间排序
+- 进入文件时默认打开的画布、以及你点过的画布，都会自动加入并置顶
+- 点标签 → 切换到对应画布；点 × → 关闭该标签（仅本地）
+- 右侧「画布 N」→ 点击展开画布列表下拉，点任意项切换
+- 右侧「关闭其他」→ 只保留当前画布标签，关闭其余
+- 右侧「图钉」→ 切换固定显示 / 浮动显示（浮动时标签栏自动隐藏，鼠标移到窗口顶部滑出，离开自动收起）
+- 右侧「位置」→ 切换标签栏位置（顶部 / 工具栏下方），即时生效并写入本地存储（localStorage `md_tabbar_position`）
+
+> 所有关闭操作只移除本地标签，**不修改墨刀里的画布数据**。
+
+## 一键安装（开箱即用）
+
+> 前提：客户端版本为 **1.6.4**（安装路径含 `app-1.6.4`）。若版本不同，见下方「从源码重打」。
+
+1. **完全退出**墨刀企业版（含右下角托盘图标）。
+2. 把 `app.asar.patched` 和 `apply-patch.cmd` 放到**同一个目录**（任意位置即可）。
+3. 双击 `apply-patch.cmd`，脚本会自动完成：检测客户端是否在运行 → 备份原 `app.asar` → 替换为补丁版。
+4. 重新打开墨刀企业版，进入任一设计文件，窗口顶部即出现「最近画布」标签栏。
+
+## 还原 / 卸载
+替换前脚本会把原文件备份为 `app.asar.bak`（与原文件同目录）。要还原：退出客户端后，用 `app.asar.bak` 覆盖回 `app.asar` 即可。
+
+## 从源码重打（客户端升级 / 版本不同）
+客户端升级会覆盖 `app.asar`，此时用 `src/` 里的源码重新打补丁。需要 Node.js 环境（自带 `npx`）：
+
+```bash
+# 1. 解包当前客户端的 app.asar
+npx @electron/asar extract app.asar app_unpacked
+
+# 2. 复制插件文件到 resource/（含共享核心模块 recent-tabs-core.js）
+cp desktop/tabbar.css desktop/tabbar.js desktop/recent-tabs-core.js desktop/recent-tabs-bootstrap.js app_unpacked/resource/
+
+# 3. 追加注入片段到 preload.js（务必先加一个换行）
+printf '\n' >> app_unpacked/resource/preload.js
+cat desktop/preload-inject.js >> app_unpacked/resource/preload.js
+
+# 4. 重新打包
+npx @electron/asar pack app_unpacked app.asar.patched
+```
+
+然后把新生成的 `app.asar.patched` 替换到 `resources/app.asar`。
+
+## 目录结构
+```
+modao-recent-tabs-plugin/
+├── README.md                 # 本说明
+├── app.asar.patched          # 已打好的补丁包（直接替换用）
+├── apply-patch.cmd           # 一键替换脚本
+├── src/                      # 源码（升级后重打用）
+│   ├── tabbar.css            #   标签栏样式
+│   ├── tabbar.js             #   标签栏组件（RecentTabsBar）
+│   ├── preload-inject.js     #   preload 注入片段
+│   └── recent-tabs-bootstrap.js  # 画布数据 + 交互逻辑
+└── sniffer-canvas-*.js       # 排障工具（可选，位于仓库根目录）
+    ├── sniffer-canvas-item.js    #   输出指定画布项 DOM 结构，排查「某画布不显示」
+    ├── sniffer-canvas-dom.js     #   探查左侧画布栏 DOM 结构
+    └── sniffer-console.js        #   控制台排障输出
+```
+
+## 排障工具
+- **某画布点了不显示**：浏览器打开该设计文件 → F12 → Console → 粘贴 `sniffer-canvas-item.js`（仓库根目录）全部内容回车，把输出发给维护者定位。
+- **想了解左侧画布栏结构**：同理运行 `sniffer-canvas-dom.js`。
+
+## 注意事项
+- 本插件只改桌面客户端本地 `app.asar`，**不改内网服务器**。
+- 关闭标签仅移除本地标签，不删墨刀画布。
+- 若团队客户端版本不是 1.6.4，用「从源码重打」生成对应版本的补丁包。
