@@ -10,3 +10,6 @@ release/
 *.log
 modao-debug.log
 .DS_Store
+# 测试产物
+tests/__pycache__/
+tests/artifacts/

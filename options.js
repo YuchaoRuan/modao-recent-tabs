@@ -54,4 +54,37 @@
       }
     });
   });
+
+  // 标签栏位置（above/below）：向当前墨刀标签页内容脚本发 MD_SET_TABBAR_POSITION
+  var posEl = document.getElementById("tabbarPosition");
+  var applyPosBtn = document.getElementById("applyPosition");
+  if (posEl) posEl.value = "below";
+
+  function sendPositionMessage(position) {
+    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      var t = tabs && tabs[0];
+      if (!t || typeof t.id !== "number") {
+        setStatus("未找到当前标签页", "err");
+        return;
+      }
+      try {
+        chrome.tabs.sendMessage(t.id, { type: "MD_SET_TABBAR_POSITION", position: position }, function () {
+          var err = chrome.runtime.lastError;
+          if (err) {
+            setStatus("请先在该墨刀标签页加载插件", "err");
+          } else {
+            setStatus("已应用标签栏位置：" + (position === "above" ? "上方" : "下方"), "ok");
+          }
+        });
+      } catch (e) {
+        setStatus("应用失败：" + (e && e.message ? e.message : e), "err");
+      }
+    });
+  }
+
+  if (applyPosBtn) {
+    applyPosBtn.addEventListener("click", function () {
+      sendPositionMessage(posEl ? posEl.value : "below");
+    });
+  }
 })();

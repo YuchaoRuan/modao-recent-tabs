@@ -64,7 +64,7 @@ def start_server():
     return httpd, f"http://127.0.0.1:{port}"
 
 
-def inject_and_create(page, cid, history, active_cid=None, canvas_title=None, display_mode=None):
+def inject_and_create(page, cid, history, active_cid=None, canvas_title=None, display_mode=None, position=None):
     """写入 localStorage 历史、设定激活项、注入源码并创建控制器。
     history 支持：
       - None:  不写 localStorage（用于前置手工写值的用例）
@@ -95,18 +95,20 @@ def inject_and_create(page, cid, history, active_cid=None, canvas_title=None, di
             cid, json.dumps(history),
         )
     dm_js = ('localStorage.setItem(\'md_display_mode\', %s);' % json.dumps(display_mode)) if display_mode else ""
+    pos_js = ('localStorage.setItem(\'md_tabbar_position\', %s);' % json.dumps(position)) if position else ""
     page.evaluate(
         """
         (function(){
           %s
           localStorage.removeItem('md_display_mode');
           %s
+          %s
           document.querySelectorAll('.rn-list-item').forEach(function(e){ e.classList.remove('is-active'); });
           %s
           %s
         })();
         """
-        % (set_js, dm_js, active_js, title_js)
+        % (set_js, dm_js, pos_js, active_js, title_js)
     )
     # 给左侧画布项挂点击计数，用于校验「点标签→模拟点击左侧项」
     page.evaluate(

@@ -21,6 +21,7 @@
 
     var CLO  = "md_closed_screens";
     var DMODE = "md_display_mode";
+    var POS_KEY = "md_tabbar_position";
     var TOPBAR_H = 44;
 
     var cid = null;
@@ -246,11 +247,16 @@
     try { displayMode = localStorage.getItem(DMODE) || "fixed"; } catch (e) {}
     if (displayMode !== "float") displayMode = "fixed";
 
+    var positionMode = "below";
+    try { positionMode = localStorage.getItem(POS_KEY) || "below"; } catch (e) {}
+    if (positionMode !== "above") positionMode = "below";
+
     var offsetStyle = null;
     var hotspot = null;
     var lastHb = -1;
     var contentEls = [];             // 已应用下推的区域容器集合（画布视口 + 左右面板）
     var contentBaseMap = null;      // WeakMap<el, number> 下推前基准高度(px)，用于收缩高度防底部溢出
+    var toolbarEl = null;           // 被下沉的墨刀默认工具栏元素（above+fixed 模式），destroy 时复位 marginTop
 
     function persistDisplayMode() {
       try { localStorage.setItem(DMODE, displayMode); } catch (e) {}
@@ -292,38 +298,48 @@
 
     // 按当前工具栏高度刷新避让样式（标签栏 top / body padding / 浮动隐藏偏移 / 热点高度）。
     // 与 displayMode 解耦：工具栏高度变化（SPA 重渲染）时只调本函数，不打断浮动显隐状态。
-    function updateOffset(hb) {
+    function updateOffset(ti) {
       var isFloat = displayMode === "float";
-      bar.barEl.style.top = hb + "px";
-      bar.barEl.style.setProperty("--md-hide-offset", hb + "px");
+      var isAbove = positionMode === "above";
+      // above 时标签栏贴顶(top:0)、隐藏偏移为 0；below 置于工具栏「自然底边」之下。
+      // 必须用 naturalBottom 而非 live hb：above→below 切换瞬间工具栏仍带 44px 下沉(marginTop)，
+      // 此时 live hb=92，若据此定位会把 bar 放到 92px（压住未及还原的工具栏）；
+      // naturalBottom 恒为下沉前的 48，使 bar 正确回到工具栏自然底边、切换不跳变。
+      bar.barEl.style.top = isAbove ? "0px" : ti.naturalBottom + "px";
+      bar.barEl.style.setProperty("--md-hide-offset", isAbove ? "0px" : ti.naturalBottom + "px");
+      // 工具栏下沉用 marginTop（非 body padding），不触发反馈环；仅 above+fixed 下沉，below 与 above+float 清除
+      if (ti.el) {
+        toolbarEl = ti.el;
+        ti.el.style.marginTop = (isAbove && !isFloat) ? (TOPBAR_H + "px") : "";
+      }
       if (!offsetStyle) {
         offsetStyle = document.createElement("style");
         offsetStyle.id = "md-recent-tabs-offset";
         document.head.appendChild(offsetStyle);
       }
-      offsetStyle.textContent = isFloat
-        ? (hb > 0 ? "body{padding-top:" + hb + "px !important;}" : "body{padding-top:0 !important;}")
-        : (hb > 0 ? "body{padding-top:" + (TOPBAR_H + hb) + "px !important;}" : "body{padding-top:" + TOPBAR_H + "px !important;}");
-      if (hotspot) hotspot.style.height = (hb > 0 ? hb : 8) + "px";
-      applyContentOffset(hb); // A2：同步画布/侧栏区域容器下推避让
+      // 顶部总占用：浮动模式仅工具栏(hb)；固定模式 bar(44)+工具栏自然高(48)=92（above/below 相同）
+      var reserved = isFloat ? ti.hb : (TOPBAR_H + ti.naturalBottom);
+      offsetStyle.textContent = "body{padding-top:" + reserved + "px !important;}";
+      if (hotspot) hotspot.style.height = (ti.hb > 0 ? ti.hb : 8) + "px";
+      applyContentOffset(ti); // A2：同步画布/侧栏区域容器下推避让
     }
 
     // 工具栏高度动态重测：hb 变化才刷新避让（幂等，供 2s 轮询与 MutationObserver 调用）。
     function refreshLayout() {
-      var hb = detectHeaderBottom();
-      if (hb === lastHb) return;
-      lastHb = hb;
-      updateOffset(hb);
+      var ti = getToolbarInfo();
+      if (ti.hb === lastHb) return;   // above 下沉后 hb 恒 92 → 幂等；内容命中走 naturalBottom，不塌陷
+      lastHb = ti.hb;
+      updateOffset(ti);
     }
 
     function applyDisplayMode() {
-      var hb = detectHeaderBottom();
-      lastHb = hb;
+      var ti = getToolbarInfo();
+      lastHb = ti.hb;
       var isFloat = displayMode === "float";
       bar.barEl.classList.toggle("is-float", isFloat);
       bar.barEl.classList.remove("is-visible");
       bar.setPinned(!isFloat);
-      updateOffset(hb);
+      updateOffset(ti);
       if (isFloat) {
         ensureHotspot();
       } else {
@@ -338,8 +354,11 @@
     // CSS 属性选择器必须用 [class*='...' i]（大小写不敏感）才能命中 StyledTopBar；
     // 定位放宽到 fixed/sticky/absolute、仅取视口顶部 60px 内的横带、高度 16~160，
     // 取「顶部最高横带」的 bottom 作为工具栏高度 hb。
-    function detectHeaderBottom() {
-      var max = 0;
+    // 返回工具栏元素 + 实时底边(hb) + 自然底边(naturalBottom=实时底边-自身marginTop)。
+    // naturalBottom 是内容命中的稳定基准：above 固定模式把工具栏下沉 44 后 hb 变 92，
+    // 但 naturalBottom 恒为下沉前的 48，避免 findContentContainers 误用实时 hb 导致塌陷（R1/R5）。
+    function getToolbarInfo() {
+      var best = null, bestBottom = 0;
       var sels = [
         "header",
         "[class*='topbar' i]",
@@ -360,10 +379,16 @@
         if (r.top > 60) return;        // 仅视口顶部区域，防误抓页面中部元素
         if (r.height < 16 || r.height > 160) return;
         if (r.width < 200) return;    // 仅视口顶部宽横带，排除工具栏内小图标
-        max = Math.max(max, Math.round(r.bottom));
+        var b = Math.round(r.bottom);
+        if (b > bestBottom) { bestBottom = b; best = el; }
       });
-      return max;
+      if (!best) return { el: null, hb: 0, naturalBottom: 0 };
+      var cs = getComputedStyle(best);
+      var mt = parseFloat(cs.marginTop);
+      var naturalBottom = bestBottom - (isNaN(mt) ? 0 : mt);
+      return { el: best, hb: bestBottom, naturalBottom: naturalBottom };
     }
+    function detectHeaderBottom() { return getToolbarInfo().hb; }
 
     // A2（增强避让收尾，v1.0.6 扩展至左右面板）：把画布视口与各侧栏面板整体下推 TAB_H，
     // 使其始于标签栏之下。真实墨刀整体布局为「绝对定位 app 外壳 example-app(top:0) 内嵌：
@@ -374,7 +399,7 @@
     // 选型稳健性：墨刀使用 styled-components 哈希类名（版本间易变），故不依赖具体面板选择器，
     // 而是「在 app 外壳内、顶边贴近工具栏底部(hb±4)、且为 absolute/relative 定位、高度≥30」
     // 的区域容器全部下推（并去重只取最外层，避免画布内嵌 absolute 子元素被重复下推）。
-    function findContentContainers(hb) {
+    function findContentContainers(threshold) {
       var shell = document.querySelector("[class*='example-app' i]") || document.querySelector(".app-shell");
       if (!shell) return [];
       var cands = [];
@@ -390,7 +415,7 @@
         // 否则重刷时 live top=92≠hb 会漏选并清空下推（resize/换页后 hb 变化即塌陷）。
         var curMt = parseFloat(cs.marginTop);
         var baseTop = r.top - (isNaN(curMt) ? 0 : curMt);
-        if (Math.abs(baseTop - hb) > 4) continue;     // 顶边贴近工具栏底部（基准位）
+        if (Math.abs(baseTop - threshold) > 4) continue;     // 顶边贴近工具栏自然底边(48)，above/below 通用
         if (r.height < 30) continue;                  // 排除小元素（图标/分隔条）
         cands.push(el);
       }
@@ -407,10 +432,12 @@
       return out;
     }
 
-    function applyContentOffset(hb) {
+    function applyContentOffset(ti) {
       var isFloat = displayMode === "float";
       if (contentBaseMap == null) contentBaseMap = new WeakMap();
-      var targets = isFloat ? [] : findContentContainers(hb);
+      // 仅固定模式才下推内容（above+float 退化为 below+float：工具栏不下沉、内容不下推）
+      var pushContent = !isFloat;
+      var targets = pushContent ? findContentContainers(ti.naturalBottom) : [];
       // 还原不再属于目标的元素（float 切换 / DOM 变化导致区域容器增减）
       for (var k = 0; k < contentEls.length; k++) {
         var old = contentEls[k];
@@ -508,6 +535,18 @@
     // 来自设置页的消息（清除已关闭标签）：仅浏览器扩展侧启用
     if (enableMessageListener && typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
       chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+        if (msg && msg.type === "MD_SET_TABBAR_POSITION") {
+          var p = (msg.position === "above") ? "above" : "below";
+          try { localStorage.setItem(POS_KEY, p); } catch (e) {}
+          positionMode = p;
+          applyDisplayMode();   // 立即重排：bar.top / 工具栏下沉 / 内容下推 全部刷新
+          if (typeof sendResponse === "function") sendResponse({ ok: true, position: p });
+          return false;
+        }
+        if (msg && msg.type === "MD_GET_TABBAR_POSITION") {
+          if (typeof sendResponse === "function") sendResponse({ ok: true, position: positionMode });
+          return false;
+        }
         if (msg && msg.type === "MD_CLEAR_CLOSED") {
           closed = [];
           persistClosed();
@@ -531,6 +570,7 @@
         try { if (root.parentNode) root.parentNode.removeChild(root); } catch (e) {}
         if (offsetStyle && offsetStyle.parentNode) offsetStyle.parentNode.removeChild(offsetStyle);
         offsetStyle = null;
+        if (toolbarEl) { toolbarEl.style.marginTop = ""; toolbarEl = null; }
         for (var ci = 0; ci < contentEls.length; ci++) {
           contentEls[ci].style.marginTop = "";
           contentEls[ci].style.height = "";
