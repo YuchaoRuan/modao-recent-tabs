@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "墨刀最近画布标签栏（内网）",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "在墨刀企业版（内网 http://10.83.117.101:9080）设计文件页顶部以标签栏展示最近打开的画布（设计文件内的 screen），支持点击快速切换、单标签关闭、关闭其他、画布列表下拉、固定/浮动显示。逻辑与桌面客户端一致，不依赖 modao.cc。",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
