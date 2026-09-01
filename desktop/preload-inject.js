@@ -2,8 +2,14 @@
    注意：本文件最前面必须以 ; 开头，避免与上一行的 process.once(...) 被 ASI 拼成函数调用 */
 ;(function () {
   "use strict";
+  // 排障日志：默认仅输出到 DevTools 控制台。如需落盘，临时把 DEBUG_FILE 设为绝对路径后再重打补丁。
+  // 发布版本保持为空，避免将日志写入任何硬编码路径（隐私/兼容）。
+  var DEBUG_FILE = "";
   function dbg(m) {
-    try { require("fs").appendFileSync("C:/Users/15020/modao-debug.log", new Date().toISOString() + " | " + m + "\n"); } catch (e) {}
+    if (DEBUG_FILE) {
+      try { require("fs").appendFileSync(DEBUG_FILE, new Date().toISOString() + " | " + m + "\n"); } catch (e) {}
+    }
+    try { console.log("[md-recent-tabs] " + m); } catch (e) {}
   }
   try {
     dbg("ENTER");
@@ -11,7 +17,7 @@
     var path = require("path"); dbg("path ok __dirname=" + __dirname);
     function read(n) { return fs.readFileSync(path.join(__dirname, n), "utf8"); }
     var css = read("tabbar.css"); dbg("css len=" + css.length);
-    var js = ["tabbar.js", "recent-tabs-bootstrap.js"].map(read).join("\n;\n");
+    var js = ["tabbar.js", "recent-tabs-core.js", "recent-tabs-bootstrap.js"].map(read).join("\n;\n");
     dbg("js len=" + js.length);
 
     function domInject() {

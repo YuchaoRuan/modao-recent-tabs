@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<!--
+  模拟墨刀企业版「设计文件页」（http://.../proto/design/<cid>）。
+  仅用于自动化测试，结构与 recent-tabs-core.js 读取的选择器对齐：
+    - 绝对定位外壳 app-shell（模拟真实 example-app：position:absolute top:0），
+      使 body padding-top 不会下移工具栏，避免「检测→加 padding→再检测」反馈环。
+    - 工具栏 app-header 为 styled-components 风格 div（styles__StyledTopBar-…，模拟真实墨刀），
+      position:relative 固定在壳内顶部（真实墨刀正是 relative 工具栏，嵌套在 absolute 壳内 → 视口 top:0）。
+    - 左侧画布栏 div.rn-list-item[data-cid]，含名称；其中一个 .folder 用于排除校验
+    - .canvas-title 用于激活画布名兜底反查
+  不预置 #md-recent-tabs-root（由 recent-tabs-core 自行创建）。
+  真实画布历史由测试脚本写入 localStorage['screen-history-onLeave-project-<cid>']。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    /* 绝对定位外壳：模拟真实墨刀 example-app（position:absolute top:0）。
+       关键 —— 让 body{padding-top}（避让偏移）不会把工具栏推下去，
+       否则会出现「检测工具栏 top:0→加 padding→工具栏被推到 top:92→再检测 top>60 漏检→padding 塌缩」的反馈环。 */
+    .app-shell { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
+    /* 顶栏：styled-components 风格（div + styles__StyledTopBar-… 类名），模拟真实墨刀 DOM。
+       真实墨刀顶部工具栏正是 styled-components 生成的 position:relative
+       （div.styles__StyledToolbar-sc-… GUIDE_TOOLBAR_COMMON，视口 top:0 height:48），
+       嵌套在 absolute 壳内，故 body padding 不会移动它。 */
+    .app-header {
+      position: relative; top: 0; left: 0; right: 0; height: 48px;
+      background: #fff; border-bottom: 1px solid #e5e7eb;
+      display: flex; align-items: center; padding: 0 16px; z-index: 100;
+    }
+    .app-header .logo { font-weight: 700; color: #2d7ff9; }
+    /* 模拟左侧画布栏（绝对定位，相对 .app-shell） */
+    .rn-sidebar { position: absolute; top: 48px; left: 0; width: 220px; bottom: 0; background: #f7f8fa; border-right: 1px solid #e5e7eb; padding: 8px; overflow: auto; }
+    .rn-list-item { padding: 8px 10px; border-radius: 6px; margin-bottom: 4px; cursor: pointer; font-size: 13px; color: #1f2329; }
+    .rn-list-item:hover { background: #eef3ff; }
+    .rn-list-item.is-active { background: #eef3ff; color: #2d7ff9; font-weight: 600; }
+    .rn-list-item.folder { color: #646a73; font-style: italic; }
+    .rn-canvas { position: absolute; top: 48px; left: 220px; right: 220px; bottom: 0; padding: 24px; }
+    .rn-right-panel { position: absolute; top: 48px; right: 0; width: 220px; bottom: 0; background: #f7f8fa; border-left: 1px solid #e5e7eb; padding: 8px; overflow: auto; }
+    .canvas-title { font-size: 18px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="app-header styles__StyledTopBar-sc-121m7wg-0 jBNgew" role="banner"><span class="logo">墨刀 · 内网</span></div>
+
+    <aside class="rn-sidebar">
+      <!-- 普通画布项：data-cid 必填，名称放文本（readName 读 textContent） -->
+      <div class="rn-list-item" data-cid="S1">消息模板管理</div>
+      <div class="rn-list-item" data-cid="S2">新增修改说明</div>
+      <div class="rn-list-item" data-cid="S3">登录页手机号</div>
+      <div class="rn-list-item" data-cid="S4">订单详情退款</div>
+      <div class="rn-list-item" data-cid="S5">首页Banner配置</div>
+      <!-- 文件夹：应被 getScreenMap / 点击监听排除 -->
+      <div class="rn-list-item folder" data-cid="SF">组件库</div>
+    </aside>
+
+    <main class="rn-canvas">
+      <div class="canvas-title">消息模板管理</div>
+      <div>画布编辑区（模拟）</div>
+    </main>
+
+    <aside class="rn-right-panel">
+      <div class="canvas-title">属性面板</div>
+      <div>右侧检查器（模拟）</div>
+    </aside>
+  </div>
+</body>
+</html>

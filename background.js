@@ -18,18 +18,40 @@ chrome.runtime.onInstalled.addListener(function (details) {
 // 内容脚本已做幂等保护（重复注入不会重复挂载）。
 chrome.action.onClicked.addListener(function (tab) {
   if (!tab || typeof tab.id !== "number") return;
+  var tid = tab.id;
   chrome.scripting.insertCSS(
-    { target: { tabId: tab.id }, files: ["tabbar.css"] },
+    { target: { tabId: tid }, files: ["tabbar.css"] },
     function () {
+      if (chrome.runtime.lastError) { reportInjectFail(tid); return; }
       chrome.scripting.executeScript(
-        { target: { tabId: tab.id }, files: ["tabbar.js", "content.js"] },
+        { target: { tabId: tid }, files: ["tabbar.js", "content.js"] },
         function () {
-          if (chrome.runtime.lastError) {
-            // 常见原因：当前页不是墨刀页面，或未被授予宿主权限。
-            console.warn("[墨刀最近画布] 注入失败：", chrome.runtime.lastError.message);
-          }
+          if (chrome.runtime.lastError) { reportInjectFail(tid); return; }
+          markInjected(tid);
         }
       );
     }
   );
 });
+
+// 注入失败：给出可操作的提示（地址/权限），并通过角标让用户感知。
+function reportInjectFail(tid) {
+  var msg = (chrome.runtime.lastError && chrome.runtime.lastError.message) || "未知错误";
+  console.warn(
+    "[墨刀最近画布] 注入失败：" + msg +
+    "。常见原因：当前页不是墨刀页面，或该地址未在 manifest 的 host_permissions 中授权" +
+    "（自定义服务器地址需要在 manifest 添加对应主机或 <all_urls>）。"
+  );
+  try {
+    chrome.action.setBadgeText({ tabId: tid, text: "!" });
+    chrome.action.setBadgeBackgroundColor({ tabId: tid, color: "#f53f3f" });
+    chrome.action.setTitle({ tabId: tid, title: "注入失败：" + msg });
+  } catch (e) {}
+}
+
+function markInjected(tid) {
+  try {
+    chrome.action.setBadgeText({ tabId: tid, text: "" });
+    chrome.action.setTitle({ tabId: tid, title: "墨刀最近画布：已注入" });
+  } catch (e) {}
+}

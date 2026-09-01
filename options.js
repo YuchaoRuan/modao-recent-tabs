@@ -39,14 +39,19 @@
         setStatus("未找到当前标签页", "err");
         return;
       }
-      chrome.tabs.sendMessage(t.id, { type: "MD_CLEAR_CLOSED" }, function () {
-        var err = chrome.runtime.lastError;
-        if (err) {
-          setStatus("请先在该墨刀标签页加载插件", "err");
-        } else {
-          setStatus("已清除关闭记录", "ok");
-        }
-      });
+      try {
+        chrome.tabs.sendMessage(t.id, { type: "MD_CLEAR_CLOSED" }, function () {
+          var err = chrome.runtime.lastError;
+          if (err) {
+            setStatus("请先在该墨刀标签页加载插件", "err");
+          } else {
+            setStatus("已清除关闭记录", "ok");
+          }
+        });
+      } catch (e) {
+        // 边缘情况：sendMessage 直接抛异常（非走 lastError）
+        setStatus("清除失败：" + (e && e.message ? e.message : e), "err");
+      }
     });
   });
 })();

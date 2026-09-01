@@ -2,46 +2,66 @@
 setlocal enableextensions
 REM ============================================================
 REM  Modao Enterprise desktop client - apply recent-canvas patch
-REM  Put app.asar.patched in the SAME folder as this script.
-REM  Close the Modao Enterprise client before running.
+REM  Place app.asar.patched next to this script, then run.
+REM  Close Modao Enterprise (incl. tray icon) before running.
+REM  Every run appends a result line to apply-patch.log here.
 REM ============================================================
 
 set "SRC=%~dp0app.asar.patched"
 set "APPVER=app-1.6.4"
 set "TARGET=%LOCALAPPDATA%\modao-studio-enterprise\%APPVER%\resources\app.asar"
+set "LOG=%~dp0apply-patch.log"
+
+echo [%DATE% %TIME%] apply-patch start > "%LOG%"
 
 if not exist "%SRC%" (
-  echo [ERROR] app.asar.patched not found:
+  echo [%DATE% %TIME%] ERROR: app.asar.patched not found: %SRC% >> "%LOG%"
+  echo ERROR: app.asar.patched not found beside this script.
   echo   %SRC%
-  echo Please place app.asar.patched next to this script.
   goto :end
 )
 
 if not exist "%TARGET%" (
-  echo [ERROR] target not found:
+  echo [%DATE% %TIME%] ERROR: target app.asar not found: %TARGET% >> "%LOG%"
+  echo ERROR: target app.asar not found.
   echo   %TARGET%
-  echo If the client version changed, edit APPVER in this script.
+  echo   If the client version changed, edit APPVER in this script.
   goto :end
 )
 
 tasklist /FI "IMAGENAME eq Modao Enterprise.exe" 2>NUL | find /I "Modao Enterprise.exe" >NUL
 if not errorlevel 1 (
-  echo [WARN] Modao Enterprise is running. Close it (including tray icon) and retry.
+  echo [%DATE% %TIME%] WARN: Modao Enterprise is running, abort. >> "%LOG%"
+  echo WARN: Modao Enterprise is still running.
+  echo       Close it completely, including the tray icon, then run again.
   goto :end
 )
 
-echo Backing up original app.asar ...
-copy /Y "%TARGET%" "%TARGET%.bak" >NUL
-if errorlevel 1 ( echo [ERROR] backup failed. & goto :end )
+if not exist "%TARGET%.bak" (
+  copy /Y "%TARGET%" "%TARGET%.bak" >NUL
+  if errorlevel 1 (
+    echo [%DATE% %TIME%] ERROR: backup failed. >> "%LOG%"
+    echo ERROR: could not back up the original app.asar.
+    goto :end
+  )
+  echo [%DATE% %TIME%] backed up original to %TARGET%.bak >> "%LOG%"
+) else (
+  echo [%DATE% %TIME%] backup already exists, skipped. >> "%LOG%"
+)
 
-echo Applying patch ...
 copy /Y "%SRC%" "%TARGET%" >NUL
-if errorlevel 1 ( echo [ERROR] replace failed. & goto :end )
+if errorlevel 1 (
+  echo [%DATE% %TIME%] ERROR: replace failed, check permissions. >> "%LOG%"
+  echo ERROR: failed to replace app.asar, try running as administrator.
+  goto :end
+)
 
+echo [%DATE% %TIME%] OK: patch applied. >> "%LOG%"
 echo.
-echo Done. Original backed up to:
-echo   %TARGET%.bak
-echo You can now start Modao Enterprise.
+echo Done. Recent-canvas tab bar patch applied.
+echo   Original backup: %TARGET%.bak
+echo   Restart Modao Enterprise to load it.
 
 :end
+echo [%DATE% %TIME%] apply-patch end. See %LOG% >> "%LOG%"
 pause

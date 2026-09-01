@@ -26,7 +26,7 @@ document.head.appendChild(<script>);   // 脚本在主世界执行
 ## 从源码重打（客户端升级后）
 ```bash
 npx @electron/asar extract app.asar app_unpacked
-cp tabbar.css tabbar.js recent-tabs-bootstrap.js app_unpacked/resource/
+cp desktop/tabbar.css desktop/tabbar.js desktop/recent-tabs-core.js desktop/recent-tabs-bootstrap.js app_unpacked/resource/
 printf '\n' >> app_unpacked/resource/preload.js
 cat desktop/preload-inject.js >> app_unpacked/resource/preload.js
 npx @electron/asar pack app_unpacked app.asar.patched

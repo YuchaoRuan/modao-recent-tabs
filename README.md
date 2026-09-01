@@ -34,12 +34,12 @@
 # 1. 解包当前客户端的 app.asar
 npx @electron/asar extract app.asar app_unpacked
 
-# 2. 复制插件文件到 resource/
-cp src/tabbar.css src/tabbar.js src/recent-tabs-bootstrap.js app_unpacked/resource/
+# 2. 复制插件文件到 resource/（含共享核心模块 recent-tabs-core.js）
+cp desktop/tabbar.css desktop/tabbar.js desktop/recent-tabs-core.js desktop/recent-tabs-bootstrap.js app_unpacked/resource/
 
 # 3. 追加注入片段到 preload.js（务必先加一个换行）
 printf '\n' >> app_unpacked/resource/preload.js
-cat src/preload-inject.js >> app_unpacked/resource/preload.js
+cat desktop/preload-inject.js >> app_unpacked/resource/preload.js
 
 # 4. 重新打包
 npx @electron/asar pack app_unpacked app.asar.patched
