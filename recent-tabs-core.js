@@ -1,4 +1,6 @@
 /* =========================================================================
+ * v1.0.13 找不到画布时自动重定位：优先用左侧搜索框清空/按名检索把目标带回 DOM，
+ *         彻底失败才走 v1.0.12 的滚动扫描 + 不可达提示兜底链（见 locateCanvas）。
  * 墨刀企业版（内网）「最近画布」— 共享核心逻辑
  * 浏览器扩展内容脚本与桌面注入共用，由 content.js / recent-tabs-bootstrap.js 调用。
  * 依赖全局 RecentTabsBar（tabbar.js）。
@@ -156,6 +158,11 @@
     var REVEAL_MAX_STEPS = 24;
     var REVEAL_STEP_MS = 24;
 
+    // 搜索定位（v1.0.13）：轮询预算 / 间隔，以及在飞句柄（destroy 时取消）。
+    var LOCATE_TIMEOUT_MS = 2000;
+    var LOCATE_STEP_MS = 90;
+    var locateHandle = null;
+
     function revealCanvasEl(id, callback) {
       var token = ++revealToken;
       var sc = getCanvasScrollContainer();
@@ -191,6 +198,141 @@
       try { sc.scrollTop = positions[0]; } catch (e) {}
       idx = 1;
       revealTimer = setTimeout(attempt, REVEAL_STEP_MS);
+    }
+
+    // 以 React 兼容方式写入左侧搜索框并触发墨刀内部重渲染：
+    // 墨刀搜索框是受控 input，直接 box.value= 不会更新其内部状态；必须用
+    // HTMLInputElement.prototype 上的原生 value setter 写值，再派发 input/change
+    // （bubbles）事件让 React onChange 触发列表过滤。整段 try/catch 容错，
+    // 在普通 DOM（非 React）环境同样可用。
+    function setSearchValue(box, v) {
+      var val = v == null ? "" : String(v);
+      try {
+        var desc = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement ? HTMLInputElement.prototype : null, "value"
+        );
+        if (desc && desc.set) desc.set.call(box, val);
+        else box.value = val;
+      } catch (e) {
+        try { box.value = val; } catch (e2) {}
+      }
+      try {
+        box.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+        box.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+      } catch (e) {}
+    }
+
+    // 探测墨刀左侧「画布搜索框」（真机取证 2026-09-07）：
+    //   <input placeholder="关键字搜索…" class=""> 位于左侧栏顶部、视口 300px 内。
+    // 条件放宽到「placeholder 含 搜索/查找/检索」+ 视口顶部 300px 内 + 宽度 > 40px，
+    // 避免命中页面其它角落的小输入框；找不到返回 null（走原路径，不改旧行为）。
+    function findScreenSearchBox() {
+      var inputs = document.querySelectorAll("input");
+      for (var i = 0; i < inputs.length; i++) {
+        var box = inputs[i];
+        var ph = box.getAttribute ? (box.getAttribute("placeholder") || "") : "";
+        if (!/搜索|查找|检索/.test(ph)) continue;
+        try {
+          var r = box.getBoundingClientRect();
+          if (r.width <= 40) continue;     // 太窄不可能是左侧栏搜索框
+          if (r.top >= 300) continue;      // 仅认视口顶部 300px 内的搜索框
+        } catch (e) {
+          continue;
+        }
+        return box;
+      }
+      return null;
+    }
+
+    // 轮询 findCanvasEl(id)：命中即 cb(el)，预算耗尽 cb(null)。内部捕获启动时的
+    // revealToken —— 期间一旦被新的切换请求递增（连点竞态）即静默放弃，不再回调、
+    // 也不再调度下一次；返回 { cancel } 供 destroy / 新一轮定位清理在飞轮询。
+    function pollFind(id, timeoutMs, stepMs, cb) {
+      var token = revealToken;
+      var deadline = Date.now() + timeoutMs;
+      var timer = null;
+      var stopped = false;
+      function cancel() {
+        stopped = true;
+        if (timer) { clearTimeout(timer); timer = null; }
+      }
+      function attempt() {
+        timer = null;
+        if (stopped || token !== revealToken) return;   // 被取消 / 被新切换取代
+        var el = findCanvasEl(id);
+        if (el) { cb(el); return; }
+        if (Date.now() >= deadline) { cb(null); return; }
+        timer = setTimeout(attempt, stepMs);
+      }
+      timer = setTimeout(attempt, stepMs);
+      return { cancel: cancel };
+    }
+
+    // v1.0.13 自动重定位：在 onSwitch 未命中分支、revealCanvasEl 滚动扫描**之前**
+    // 调用。真机取证结论：真实墨刀设计页左侧列表**全量渲染**，真正「找不到」的根因
+    // 是左侧搜索框处于过滤态（非命中画布被移出 DOM）；故优先把搜索框当作定位工具：
+    //   情形一  搜索框有词 → 先清空恢复全量列表，轮询目标是否回到 DOM；
+    //   情形二  仍找不到（或搜索框本就为空）→ 把目标名写入搜索框触发墨刀检索
+    //           （跨文件夹命中），命中即切换；
+    //   全部失败 → 还原搜索现场后调 fail()（= 滚动扫描 + 不可达提示，v1.0.12 语义）。
+    // 仅当「探测到搜索框」才进入；探测不到的环境（历史夹具 / 墨刀改版）直接 fail()。
+    function locateCanvas(id, name, fail) {
+      var box = findScreenSearchBox();
+      if (!box) { fail(); return; }
+      // 竞态防护：本次定位开始即令在飞扫描/轮询失效；后续每次 attempt 都校验
+      // 局部 token 仍是最新，防止「清空轮询未结束时用户又点了别的标签」旧结果覆盖。
+      var token = ++revealToken;
+      if (locateHandle) { locateHandle.cancel(); locateHandle = null; }
+      var originalValue = box.value || "";
+      var hadFocus = (document.activeElement === box);
+
+      // 切换后归还焦点（若用户原本聚焦在搜索框）
+      function finish() {
+        if (hadFocus && document.activeElement !== box) {
+          try { box.focus(); } catch (e) {}
+        }
+      }
+      // 还原用户的搜索上下文：空原值 = 保持清空（全量列表）；
+      // 非空 = 恢复原搜索词（恢复动作放在切换**之后**，避免又把它过滤掉）。
+      function restoreSearch() {
+        try { setSearchValue(box, originalValue); } catch (e) {}
+      }
+      function succeed(el) {
+        if (token !== revealToken) return;
+        activateCanvas(id, name, el);
+        finish();
+        restoreSearch();
+      }
+      function allFailed() {
+        if (token !== revealToken) return;
+        finish();
+        restoreSearch();     // 先把搜索现场还原（空原值即恢复全量列表）
+        fail();              // 滚动扫描 + 不可达提示（保持 v1.0.12 语义，不重复标 stale）
+      }
+      // 情形二：按目标名检索；名称较长时取前若干字符（子串命中即可）。
+      function searchByName() {
+        if (!name) { allFailed(); return; }
+        var q = name.length > 8 ? name.slice(0, 8) : name;
+        try { setSearchValue(box, q); } catch (e) { allFailed(); return; }
+        locateHandle = pollFind(id, LOCATE_TIMEOUT_MS, LOCATE_STEP_MS, function (el) {
+          locateHandle = null;
+          if (token !== revealToken) return;
+          if (el) { succeed(el); return; }
+          allFailed();
+        });
+      }
+      if (originalValue) {
+        // 情形一：清空过滤词 → 目标（若只是被搜索过滤）随全量列表回到 DOM
+        try { setSearchValue(box, ""); } catch (e) { allFailed(); return; }
+        locateHandle = pollFind(id, LOCATE_TIMEOUT_MS, LOCATE_STEP_MS, function (el) {
+          locateHandle = null;
+          if (token !== revealToken) return;
+          if (el) { succeed(el); return; }
+          searchByName();      // 清空后仍找不到 → 情形二
+        });
+      } else {
+        searchByName();        // 搜索框本就为空 → 直接走情形二
+      }
     }
 
     // 真正执行切换：标记最近、滚动到可见、模拟点击左侧画布项、同步激活态
@@ -324,18 +466,23 @@
         revealToken++;
         var el = findCanvasEl(id);
         if (el) { activateCanvas(id, item.name, el); return; }
-        // 画布项当前不在左侧栏 DOM：可能是虚拟滚动未渲染 / 文件夹折叠 / SPA 重建，
-        // 这**不是**「画布已删除」的充分证据。旧逻辑在此直接 delete seen + return，
+        // 画布项当前不在左侧栏 DOM：可能是搜索过滤态 / 虚拟滚动未渲染 / 文件夹折叠 /
+        // SPA 重建，这**不是**「画布已删除」的充分证据。旧逻辑在此直接 delete seen + return，
         // 会同时造成「标签消失」与「不切换」两个症状；改为：
-        //   1) 先滚动扫描整列尽力定位（虚拟滚动场景可救回）；
-        //   2) 期间把标签标记为「待定」，不删除；
-        //   3) 仍定位不到则给出可见提示，标签保留、等用户手动 × 关闭。
+        //   1) 先把标签标记为「待定」，不删除；
+        //   2) 自动重定位（locateCanvas，v1.0.13）：优先用左侧搜索框把目标带回 DOM——
+        //      有词先清空恢复全量、仍找不到再按目标名检索，命中即切换；
+        //   3) 仍定位不到则滚动扫描兜底（revealCanvasEl，虚拟滚动场景可救回）；
+        //   4) 最后给出可见提示，标签保留、等用户手动 × 关闭。
         setStale(id, true);
         scheduleRender();
-        revealCanvasEl(id, function (found, canceled) {
-          if (canceled) return;                                  // 已被新的切换请求取代
-          if (found) { activateCanvas(id, item.name, found); return; }
-          notifyUnreachable(item.name || id);
+        locateCanvas(id, item.name || id, function () {
+          // fail：保留原 revealCanvasEl 滚动扫描兜底 + notifyUnreachable（v1.0.12 语义）
+          revealCanvasEl(id, function (found, canceled) {
+            if (canceled) return;                                  // 已被新的切换请求取代
+            if (found) { activateCanvas(id, item.name, found); return; }
+            notifyUnreachable(item.name || id);
+          });
         });
       },
       onClose: function (item) {
@@ -737,7 +884,8 @@
         try { if (mo) mo.disconnect(); } catch (e) {}
         if (pollTimer) clearInterval(pollTimer);
         if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
-        revealToken++;   // 使进行中的扫描回调失效
+        revealToken++;   // 使进行中的扫描/搜索定位回调失效
+        if (locateHandle) { locateHandle.cancel(); locateHandle = null; }
         // 待执行的重渲染也要清掉：否则销毁后仍会对已脱离文档树的旧 bar 跑一次 renderList()
         if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
         if (clickHandler) document.removeEventListener("click", clickHandler, true);

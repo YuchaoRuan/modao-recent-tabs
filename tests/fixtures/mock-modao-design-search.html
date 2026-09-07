@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<!--
+  模拟墨刀企业版「设计文件页」——**带左侧画布搜索框**版本（v1.0.13 自动重定位夹具）。
+
+  依据真机取证（2026-09-07）构造：
+    1. 左侧画布列表在非搜索态**全量渲染**（li.rn-content-item[data-cid]），
+       与真实墨刀一致 —— 故 revealCanvasEl 滚动扫描在此环境基本无用武之地。
+    2. 搜索框 `<input placeholder="关键字搜索…">` 位于视口顶部 300px 内，
+       输入变化按画布名**子串**过滤：把不匹配的 li.rn-content-item[data-cid]
+       从 DOM 真正移除（模拟墨刀把非命中画布卸载），恢复时重建全量。
+    3. 输入监听方式与扩展实现一致：监听 input/change（React 受控 input 由
+       原生 value setter + 事件驱动），过滤/恢复带可配置延迟 state.latency
+       （默认 120ms，模拟墨刀 React 重渲染异步；竞态用例会调大）。
+    4. 点击画布行：模拟墨刀 SPA 切换（改标题 / 激活态 / 整栏重渲染）。
+    5. 其余结构（app-shell / 工具栏 / .canvas-title / 右面板）与既有夹具一致，
+       使 A2 布局避让等逻辑同样适用。
+
+  与 mock-modao-design-virtual.html / mock-modao-design-qa.html 的区别：
+  无虚拟滚动；核心区分点是「搜索过滤态才是找不到的真因」。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .app-shell { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
+    .app-header {
+      position: relative; top: 0; left: 0; right: 0; height: 48px;
+      background: #fff; border-bottom: 1px solid #e5e7eb;
+      display: flex; align-items: center; padding: 0 16px; z-index: 100;
+    }
+    .app-header .logo { font-weight: 700; color: #2d7ff9; }
+    .rn-sidebar {
+      position: absolute; top: 48px; left: 0; width: 220px; bottom: 0;
+      background: #f7f8fa; border-right: 1px solid #e5e7eb;
+      padding: 8px; display: flex; flex-direction: column;
+    }
+    #screen-search {
+      width: 196px; height: 30px; padding: 0 10px; margin-bottom: 8px;
+      border: 1px solid #d0d3d6; border-radius: 6px; font-size: 13px;
+      color: #1f2329; background: #fff; flex: 0 0 auto;
+    }
+    .rn-virtual {
+      flex: 1 1 auto; overflow-y: auto; overflow-x: hidden;
+      margin: 0; padding: 0; list-style: none;
+    }
+    .rn-content-item {
+      display: block; height: 32px; line-height: 16px; padding: 8px 10px;
+      border-radius: 6px; margin-bottom: 4px; cursor: pointer; font-size: 13px;
+      color: #1f2329; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .rn-content-item:hover { background: #eef3ff; }
+    .rn-content-item.is-active { background: #eef3ff; color: #2d7ff9; font-weight: 600; }
+    .rn-canvas { position: absolute; top: 48px; left: 220px; right: 220px; bottom: 0; padding: 24px; }
+    .rn-right-panel {
+      position: absolute; top: 48px; right: 0; width: 220px; bottom: 0;
+      background: #f7f8fa; border-left: 1px solid #e5e7eb; padding: 8px; overflow: auto;
+    }
+    .canvas-title { font-size: 18px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="app-header styles__StyledTopBar-sc-121m7wg-0 jBNgew" role="banner">
+      <span class="logo">墨刀 · 内网（搜索过滤夹具）</span>
+    </div>
+
+    <aside class="rn-sidebar">
+      <input id="screen-search" class="" type="text" placeholder="关键字搜索…" />
+      <ul class="rn-virtual" id="rn-list"></ul>
+    </aside>
+
+    <main class="rn-canvas">
+      <div class="canvas-title">画布编辑区（模拟）</div>
+      <div>画布编辑区（模拟）</div>
+    </main>
+
+    <aside class="rn-right-panel">
+      <div class="canvas-title">属性面板</div>
+      <div>右侧检查器（模拟）</div>
+    </aside>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+    // 与真实墨刀一致的画布清单（全量渲染；搜索过滤时非命中项从 DOM 真正移除）
+    var CANVASES = [
+      { cid: "c001", name: "消息模板管理" },
+      { cid: "c002", name: "新增修改说明" },
+      { cid: "c003", name: "登录页手机号" },
+      { cid: "c004", name: "订单详情退款" },
+      { cid: "c005", name: "首页Banner配置" },
+      { cid: "c006", name: "航班预订-列表页" },
+      { cid: "c007", name: "航班预订-结果页" },
+      { cid: "c008", name: "航班订单-支付成功" },
+      { cid: "c009", name: "个人中心设置" },
+      { cid: "c010", name: "会员卡详情" },
+      { cid: "c011", name: "优惠券领取页" },
+      { cid: "c012", name: "我的卡包-优惠券" },
+      { cid: "c013", name: "消息通知列表" },
+      { cid: "c014", name: "客服会话窗口" },
+      { cid: "c015", name: "数据看板-今日" },
+      { cid: "c016", name: "数据看板-趋势" }
+    ];
+
+    var state = { active: null, query: "", latency: 120, clicks: {}, deleted: {} };
+    var box = document.getElementById("screen-search");
+    var listEl = document.getElementById("rn-list");
+    var titleEl = document.querySelector(".rn-canvas .canvas-title");
+
+    function data() {
+      return CANVASES.filter(function (c) { return !state.deleted[c.cid]; });
+    }
+
+    // 过滤语义与墨刀一致：按画布名**子串**匹配，跨「逻辑位置」命中
+    function visible() {
+      var q = (state.query || "").trim();
+      return data().filter(function (c) { return !q || c.name.indexOf(q) !== -1; });
+    }
+
+    // 全量重建：只把命中的 li.rn-content-item[data-cid] 挂到 DOM（未命中 = 移出/卸载）
+    function render() {
+      var vis = visible();
+      var html = "";
+      for (var i = 0; i < vis.length; i++) {
+        var it = vis[i];
+        var cls = "rn-content-item" + (it.cid === state.active ? " is-active" : "");
+        html += '<li class="' + cls + '" data-cid="' + it.cid + '">' + it.name + "</li>";
+      }
+      listEl.innerHTML = html;
+    }
+
+    var rebuildTimer = null;
+    function scheduleRebuild() {
+      if (rebuildTimer) clearTimeout(rebuildTimer);
+      // 真实墨刀是 React 受控 input：清空/输入后异步重渲染（真机实测 <1.2s）
+      rebuildTimer = setTimeout(function () { rebuildTimer = null; render(); }, state.latency);
+    }
+
+    // 与扩展实现一致：原生 value setter + 派发 input/change → 这里用 addEventListener
+    box.addEventListener("input", function () {
+      state.query = box.value;
+      scheduleRebuild();
+    });
+    box.addEventListener("change", function () {
+      state.query = box.value;
+      scheduleRebuild();
+    });
+
+    // 点击画布行：模拟墨刀 SPA 切换（激活 + 标题 + 整栏重渲染）
+    listEl.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var item = t.closest("#rn-list .rn-content-item[data-cid]");
+      if (!item) return;
+      var cid = item.getAttribute("data-cid");
+      state.clicks[cid] = (state.clicks[cid] || 0) + 1;
+      state.active = cid;
+      for (var i = 0; i < CANVASES.length; i++) {
+        if (CANVASES[i].cid === cid) { titleEl.textContent = CANVASES[i].name; break; }
+      }
+      render();   // 按当前 query 立即重渲染（与真实墨刀点击后的 SPA 重绘一致）
+    });
+
+    window.__mock = {
+      state: state,
+      render: render,
+      list: data,
+      visible: visible,
+      title: function () { return titleEl.textContent; },
+      activeCid: function () { return state.active; },
+      inDom: function (cid) {
+        return !!listEl.querySelector('#rn-list [data-cid="' + cid + '"]');
+      },
+      visibleCids: function () {
+        return Array.prototype.map.call(listEl.querySelectorAll("[data-cid]"), function (e) {
+          return e.getAttribute("data-cid");
+        });
+      },
+      searchBox: function () { return box; },
+      searchValue: function () { return box.value; },
+      getClicks: function () { return state.clicks; },
+      // 真正「删除」一个画布：从数据源移除并全量重渲染（模拟用户在墨刀里删掉画布）
+      removeCanvas: function (cid) {
+        if (!state.deleted[cid]) {
+          state.deleted[cid] = true;
+          render();
+          return true;
+        }
+        return false;
+      },
+      // 测试可直接控制过滤/恢复的异步延迟（毫秒）
+      setLatency: function (ms) { state.latency = Math.max(0, ms); }
+    };
+    render();
+  })();
+  </script>
+</body>
+</html>
