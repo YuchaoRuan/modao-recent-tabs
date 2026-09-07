@@ -24,6 +24,14 @@
     var POS_KEY = "md_tabbar_position";
     var TOPBAR_H = 44;
 
+    // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
+    // 同时存在 div.rn-list-item[data-cid] 与 li.rn-content-item[data-cid] 两种形态，
+    // 只认其中一种会在另一种渲染状态下「查不到」，被误判为画布已删除。
+    var CANVAS_BASE_SELECTORS = ["div.rn-list-item", "li.rn-content-item"];
+    var CANVAS_ITEM_SELECTOR = CANVAS_BASE_SELECTORS
+      .map(function (s) { return s + "[data-cid]"; })
+      .join(", ");
+
     var cid = null;
     var lastCid = null;
     var closed = readClosed();
@@ -71,7 +79,7 @@
     // 左侧画布栏：id -> name（排除文件夹 folder）
     function getScreenMap() {
       var map = {};
-      var els = document.querySelectorAll("div.rn-list-item[data-cid]");
+      var els = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
       for (var i = 0; i < els.length; i++) {
         if (els[i].classList && els[i].classList.contains("folder")) continue;
         var id = els[i].getAttribute("data-cid");
@@ -90,12 +98,118 @@
         persistClosed();
       }
       if (!name) {
-        var el = document.querySelector('div.rn-list-item[data-cid="' + id + '"]');
+        var el = findCanvasEl(id);
         if (el) name = readName(el);
       }
       if (!name) return false;
       seen[id] = { id: id, name: name, ts: Date.now() };
+      setStale(id, false);
       return true;
+    }
+
+    // 定位左侧画布项 DOM：遍历所有已知形态，找不到返回 null。
+    // 注意：找不到 **不等于** 画布被删除 —— 左侧栏可能是虚拟滚动（未进入视口不渲染）、
+    // 文件夹折叠，或正处于 SPA 重绘瞬间。调用方必须按「暂时不可见」处理（见 onSwitch）。
+    function findCanvasEl(id) {
+      if (!id) return null;
+      var esc = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(id) : id;
+      for (var i = 0; i < CANVAS_BASE_SELECTORS.length; i++) {
+        var el = document.querySelector(CANVAS_BASE_SELECTORS[i] + '[data-cid="' + esc + '"]');
+        if (el) return el;
+      }
+      return null;
+    }
+
+    // 找到左侧画布栏的可滚动容器（虚拟化长列表的滚动宿主），用于把目标画布滚入渲染窗口。
+    function getCanvasScrollContainer() {
+      var el = document.querySelector(CANVAS_ITEM_SELECTOR);
+      while (el && el !== document.body && el !== document.documentElement) {
+        var oy = getComputedStyle(el).overflowY;
+        if ((oy === "auto" || oy === "scroll") && el.scrollHeight - el.clientHeight > 8) return el;
+        el = el.parentElement;
+      }
+      return null;
+    }
+
+    // 待定（stale）标记：画布暂时定位不到时置位，仅视觉提示，不删标签。
+    function setStale(id, stale) {
+      if (bar && typeof bar.setStale === "function") bar.setStale(id, !!stale);
+    }
+
+    // 轮询/观察时复核待定标签：画布项一旦重新出现在 DOM 中立即取消待定。
+    function revalidateStale() {
+      if (!bar || !bar.staleIds) return false;
+      var changed = false;
+      Object.keys(bar.staleIds).forEach(function (id) {
+        if (bar.staleIds[id] && findCanvasEl(id)) {
+          bar.setStale(id, false);
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    // 滚动扫描左侧画布栏，把目标画布滚进虚拟列表的渲染窗口后重新定位。
+    // 仅作尽力而为的补救：找不到时回调 (null)，并会把滚动位置还原，不打扰用户。
+    var revealToken = 0;
+    var revealTimer = null;
+    var REVEAL_MAX_STEPS = 24;
+    var REVEAL_STEP_MS = 24;
+
+    function revealCanvasEl(id, callback) {
+      var token = ++revealToken;
+      var sc = getCanvasScrollContainer();
+      if (!sc) { callback(null, false); return; }
+      var start = sc.scrollTop;
+      var maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+      var step = Math.max(120, Math.floor(sc.clientHeight * 0.75));
+      // 候选位置过密时按上限重新等分，保证总步数可控（含末尾的 maxTop 一档）。
+      if (maxTop > step * (REVEAL_MAX_STEPS - 1)) {
+        step = Math.ceil(maxTop / (REVEAL_MAX_STEPS - 1));
+      }
+      // 位置序列必须**预计算并显式补上 maxTop**：
+      // 旧实现在滚动前判定 `pos > maxTop`，而 pos 按 step 前进，
+      // 最后一个可达位置 maxTop 从未被真正访问 → 列表末尾（最后一屏）
+      // 的行在整个扫描过程中从未被渲染，findCanvasEl 恒为 null。
+      var positions = [];
+      for (var p = 0; p < maxTop; p += step) positions.push(p);
+      if (positions.length === 0 || positions[positions.length - 1] !== maxTop) positions.push(maxTop);
+      var idx = 0;
+      function attempt() {
+        if (token !== revealToken) { callback(null, true); return; }   // 已被新的切换请求取消
+        var el = findCanvasEl(id);
+        if (el) { callback(el, false); return; }
+        if (idx >= positions.length) {
+          try { sc.scrollTop = start; } catch (e) {}   // 未找到：还原用户原本的滚动位置
+          callback(null, false);
+          return;
+        }
+        try { sc.scrollTop = positions[idx]; } catch (e) {}
+        idx++;
+        revealTimer = setTimeout(attempt, REVEAL_STEP_MS);   // 虚拟列表重渲染需要一两帧
+      }
+      try { sc.scrollTop = positions[0]; } catch (e) {}
+      idx = 1;
+      revealTimer = setTimeout(attempt, REVEAL_STEP_MS);
+    }
+
+    // 真正执行切换：标记最近、滚动到可见、模拟点击左侧画布项、同步激活态
+    function activateCanvas(id, name, el) {
+      setStale(id, false);
+      touch(id, name);
+      scheduleRender();
+      try { el.scrollIntoView({ block: "nearest" }); } catch (e) {}
+      try { el.click(); } catch (e) {}   // 模拟点击左侧画布项 → 墨刀内部切换
+      bar.setActive(id);
+    }
+
+    // 定位失败：给出可见反馈，绝不静默删除标签
+    function notifyUnreachable(name) {
+      var msg = "未找到画布「" + name + "」，请先在左侧画布栏展开或滚动到它，再点击标签切换";
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[modao-recent-tabs] " + msg);
+      }
+      if (bar && typeof bar.toast === "function") bar.toast(msg, "warn");
     }
 
     // 从 screen-history 同步（初始 + 打开/离开文件时兜底）。返回是否有新画布出现。
@@ -116,26 +230,38 @@
     }
 
     // 检测当前激活画布（编辑器里正打开的那个）。优先激活态 class，其次 canvas-title 文本反查。
+    // 激活态选择器按「状态后缀 × 画布项形态」展开（保持原状态优先级在前）：
+    // 画布项存在 div.rn-list-item 与 li.rn-content-item 两种形态，只认一种会漏检。
+    var ACTIVE_STATE_SUFFIXES = [
+      ".is-active",
+      ".is-selected",
+      ".selected",
+      ".current",
+      "[aria-selected='true']"
+    ];
+    var ACTIVE_SELECTORS = (function () {
+      var out = [];
+      for (var s = 0; s < ACTIVE_STATE_SUFFIXES.length; s++) {
+        for (var b = 0; b < CANVAS_BASE_SELECTORS.length; b++) {
+          out.push(CANVAS_BASE_SELECTORS[b] + "[data-cid]" + ACTIVE_STATE_SUFFIXES[s]);
+        }
+      }
+      return out;
+    })();
+
     function getActiveScreen() {
-      var sels = [
-        "div.rn-list-item[data-cid].is-active",
-        "div.rn-list-item[data-cid].is-selected",
-        "div.rn-list-item[data-cid].selected",
-        "div.rn-list-item[data-cid].current",
-        "div.rn-list-item[data-cid][aria-selected='true']"
-      ];
-      for (var i = 0; i < sels.length; i++) {
-        var el = document.querySelector(sels[i]);
+      for (var i = 0; i < ACTIVE_SELECTORS.length; i++) {
+        var el = document.querySelector(ACTIVE_SELECTORS[i]);
         if (el) {
           var id = el.getAttribute("data-cid");
           if (id) return { id: id, name: readName(el), reliable: true };
         }
-  }
+      }
       var titleEl = document.querySelector(".canvas-title");
       if (titleEl) {
         var name = readName(titleEl);
         if (name) {
-          var els = document.querySelectorAll("div.rn-list-item[data-cid]");
+          var els = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
           for (var j = 0; j < els.length; j++) {
             if (els[j].classList && els[j].classList.contains("folder")) continue;
             if (readName(els[j]) === name) {
@@ -186,22 +312,31 @@
 
     var bar = new RecentTabsBar(root, {
       max: 20,
+      showPositionToggle: true,   // 桌面端即时切换标签栏位置（写 localStorage + 重排）
       onSwitch: function (item) {
         if (!item || !item.id) return;
-        var el = document.querySelector('div.rn-list-item[data-cid="' + item.id + '"]');
-        if (!el) {
-          // 画布已从左侧栏移除（可能已被删除）：清理失效标签，避免死标签占位误导用户（P3-2）
-          if (seen[item.id]) { delete seen[item.id]; scheduleRender(); }
-          if (typeof console !== "undefined" && console.warn) {
-            console.warn("[modao-recent-tabs] 画布不存在，已清理失效标签: " + item.id);
-          }
-          return;
-        }
-        touch(item.id, item.name);
+        var id = item.id;
+        // 任何一次新的切换请求都必须先让「在飞的滚动扫描」失效。
+        // 必须无条件放在这里（而不是只在 revealCanvasEl 内部递增）：若本次立即命中
+        // 并走 `activateCanvas` 提前 return，就不会进入 revealCanvasEl，
+        // 上一次的扫描会继续跑完并回调 activateCanvas(旧 id)，把画布切回先点的那个
+        // （连点竞态：点 A 需扫描 → 立刻点 B → 结果被 A 覆盖）。
+        revealToken++;
+        var el = findCanvasEl(id);
+        if (el) { activateCanvas(id, item.name, el); return; }
+        // 画布项当前不在左侧栏 DOM：可能是虚拟滚动未渲染 / 文件夹折叠 / SPA 重建，
+        // 这**不是**「画布已删除」的充分证据。旧逻辑在此直接 delete seen + return，
+        // 会同时造成「标签消失」与「不切换」两个症状；改为：
+        //   1) 先滚动扫描整列尽力定位（虚拟滚动场景可救回）；
+        //   2) 期间把标签标记为「待定」，不删除；
+        //   3) 仍定位不到则给出可见提示，标签保留、等用户手动 × 关闭。
+        setStale(id, true);
         scheduleRender();
-        try { el.scrollIntoView({ block: "nearest" }); } catch (e) {}
-        try { el.click(); } catch (e) {}   // 模拟点击左侧画布项 → 墨刀内部切换
-        bar.setActive(item.id);
+        revealCanvasEl(id, function (found, canceled) {
+          if (canceled) return;                                  // 已被新的切换请求取代
+          if (found) { activateCanvas(id, item.name, found); return; }
+          notifyUnreachable(item.name || id);
+        });
       },
       onClose: function (item) {
         closeId(item.id);
@@ -220,6 +355,18 @@
         displayMode = displayMode === "float" ? "fixed" : "float";
         persistDisplayMode();
         applyDisplayMode();
+      },
+      onTogglePosition: function () {
+        // 即时切换标签栏位置：写 localStorage + chrome.storage（跨域可靠来源）+ 立即重排
+        positionMode = positionMode === "above" ? "below" : "above";
+        try { localStorage.setItem(POS_KEY, positionMode); } catch (e) {}
+        try {
+          if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({ tabbarPosition: positionMode });
+          }
+        } catch (e) {}
+        applyDisplayMode();   // 立即重排：bar.top / 工具栏下沉 / 内容下推 全部刷新
+        bar.setPosition(positionMode);
       }
     });
 
@@ -348,7 +495,7 @@
     }
 
     applyDisplayMode();
-
+    bar.setPosition(positionMode);   // 同步位置切换按钮初始状态
     // 检测墨刀顶部工具栏高度（标签栏避让基准，修复「遮挡工具栏」BUG）。
     // 真实墨刀工具栏由 styled-components 生成（如 div.styles__StyledTopBar-xxx），
     // CSS 属性选择器必须用 [class*='...' i]（大小写不敏感）才能命中 StyledTopBar；
@@ -493,7 +640,7 @@
       var t = e.target;
       if (!t || !t.closest) return;
       if (!cid) return;
-      var item = t.closest("div.rn-list-item[data-cid]");
+      var item = t.closest(CANVAS_ITEM_SELECTOR);
       if (!item) return;
       if (item.classList && item.classList.contains("folder")) return; // 文件夹忽略
       var id = item.getAttribute("data-cid");
@@ -511,6 +658,7 @@
     var pollTimer = setInterval(function () {
       var changed = refreshCid();
       refreshLayout(); // 工具栏高度变化（SPA 重渲染/尺寸调整）时动态重测避让
+      if (revalidateStale()) changed = true;   // 画布项重新出现 → 取消待定标记
       if (changed) scheduleRender();
     }, 2000);
 
@@ -526,6 +674,7 @@
           moScheduled = false;
           var changed = syncFromHistory() || syncActiveScreen();
           refreshLayout(); // 顶部工具栏 DOM 增删/结构变化 → 同步重测避让
+          if (revalidateStale()) changed = true;   // 左侧栏重绘后画布项可能已重新出现
           if (changed) scheduleRender();
         });
       });
@@ -540,6 +689,7 @@
           try { localStorage.setItem(POS_KEY, p); } catch (e) {}
           positionMode = p;
           applyDisplayMode();   // 立即重排：bar.top / 工具栏下沉 / 内容下推 全部刷新
+          bar.setPosition(p);   // 同步位置切换按钮状态
           if (typeof sendResponse === "function") sendResponse({ ok: true, position: p });
           return false;
         }
@@ -559,11 +709,37 @@
       });
     }
 
+    // 位置偏好：以 chrome.storage.local 为跨域可靠来源（选项页与内容脚本同源共享）。
+    // 选项页写入 storage，内容脚本经 storage.onChanged 实时套用，不再依赖一次性消息投递是否成功。
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged) {
+      function applyPositionFromStorage(newValue) {
+        if (newValue == null) return;
+        var p = (newValue === "above") ? "above" : "below";
+        try { localStorage.setItem(POS_KEY, p); } catch (e) {}
+        positionMode = p;
+        applyDisplayMode();   // 立即重排：bar.top / 工具栏下沉 / 内容下推 全部刷新
+        bar.setPosition(p);   // 同步位置切换按钮状态
+      }
+      try {
+        chrome.storage.local.get(["tabbarPosition"], function (s) {
+          if (s && s.tabbarPosition) applyPositionFromStorage(s.tabbarPosition);
+        });
+      } catch (e) {}
+      chrome.storage.onChanged.addListener(function (changes, area) {
+        if (area !== "local") return;
+        if (changes.tabbarPosition) applyPositionFromStorage(changes.tabbarPosition.newValue);
+      });
+    }
+
     var ctrl = {
       refresh: refreshCid,
       destroy: function () {
         try { if (mo) mo.disconnect(); } catch (e) {}
         if (pollTimer) clearInterval(pollTimer);
+        if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+        revealToken++;   // 使进行中的扫描回调失效
+        // 待执行的重渲染也要清掉：否则销毁后仍会对已脱离文档树的旧 bar 跑一次 renderList()
+        if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
         if (clickHandler) document.removeEventListener("click", clickHandler, true);
         if (bar && typeof bar.destroy === "function") bar.destroy();
         removeHotspot();

@@ -276,6 +276,67 @@
   text-align: center;
 }
 
+/* 待定标签：画布项暂时不在左侧画布栏 DOM（虚拟滚动未渲染 / 文件夹折叠 / SPA 重绘）。
+   仅做视觉弱化提示 + title 说明，不删除标签（旧逻辑会静默删掉活画布的标签）。 */
+.md-tab.is-stale {
+  border-style: dashed;
+  border-color: var(--md-color-border-strong);
+  color: var(--md-color-text-tertiary);
+  background: transparent;
+}
+
+.md-tab.is-stale .md-tab__close {
+  color: var(--md-color-border-strong);
+}
+
+/* 轻提示条（无 emoji，图标内联 SVG）：定位在标签栏下沿，自动淡出 */
+.md-recent-tabs__toast {
+  position: fixed;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 460px;
+  padding: 7px 12px;
+  border: 1px solid var(--md-color-border);
+  border-radius: 8px;
+  background: var(--md-color-bg);
+  color: var(--md-color-text);
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.14);
+  font-family: var(--md-font);
+  font-size: 12px;
+  line-height: 1.5;
+  z-index: var(--md-z-topbar);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(-6px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.md-recent-tabs__toast.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.md-recent-tabs__toast-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: #ff9a2e;
+}
+
+.md-recent-tabs__toast-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.md-recent-tabs__toast-text {
+  min-width: 0;
+  word-break: break-all;
+}
+
 /* 空态 */
 .md-recent-tabs__empty {
   display: flex;
@@ -301,6 +362,16 @@
 }
 
 .md-pin-btn.is-pinned:hover {
+  background: var(--md-color-primary-soft-hover);
+}
+
+/* 位置切换按钮：贴顶态 = 标签栏在顶部 */
+.md-position-btn.is-above {
+  color: var(--md-color-primary);
+  background: var(--md-color-primary-soft);
+}
+
+.md-position-btn.is-above:hover {
   background: var(--md-color-primary-soft-hover);
 }
 

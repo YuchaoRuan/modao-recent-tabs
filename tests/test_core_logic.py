@@ -445,23 +445,41 @@ def test_a11y(browser, base):
 
 
 def test_switch_missing_canvas(browser, base):
-    t = Tester("切换已删除画布 → 清理失效标签（P3-2）")
+    """画布项不在左侧栏 DOM → **不删除**标签，仅标记待定并提示（P3-2 修订）。
+
+    修订原因（BUG 修复）：旧实现「一次 querySelector 抓不到就 delete seen + return」
+    把「DOM 暂时不可见」当成「画布已删除」——左侧栏虚拟滚动未渲染、文件夹折叠、
+    SPA 重绘瞬间都会抓不到，于是出现「点标签 → 标签消失且画布没切换」。
+    新契约：抓不到时先滚动扫描定位；仍定位不到则标记 stale + 可见提示，标签保留，
+    由用户手动 × 关闭。
+    """
+    t = Tester("切换画布项缺失 → 标记待定 + 提示，不静默删标签（P3-2 修订）")
     ctx, page = new_page(browser)
     try:
         page.goto(base + "/proto/design/" + CID, wait_until="load")
         inject_and_create(page, CID, HIST, active_cid="S5")
         page.wait_for_selector('.md-tab[data-id="S1"]')
-        # 模拟画布 S1 已从左侧栏被删除（真实环境墨刀已移除该项）
+        # 模拟画布 S1 暂时不在左侧栏（虚拟滚动未渲染 / 折叠 / SPA 重绘均等效）
         page.evaluate("document.querySelector('[data-cid=\"S1\"]').remove()")
         # 通过下拉菜单点 S1 → 触发 onSwitch
         page.click(".md-recent-tabs__badge")
         page.wait_for_selector('.md-recent-tabs__menu.is-open')
         page.click('.md-recent-tabs__menu .md-menu-item[data-id="S1"]')
-        page.wait_for_selector('.md-tab[data-id="S1"]', state="detached", timeout=2000)
-        t.check(page.evaluate("!document.querySelector('.md-tab[data-id=\"S1\"]')"),
-                "失效画布 S1 被清理（已删除，不占位误导）")
+        page.wait_for_timeout(600)
+        t.check(page.evaluate("!!document.querySelector('.md-tab[data-id=\"S1\"]')"),
+                "标签不再被静默删除（DOM 抓不到 ≠ 画布已删除）")
+        t.check(page.evaluate("!!document.querySelector('.md-tab[data-id=\"S1\"][data-stale]')"),
+                "标签被标记为待定(stale)")
+        t.check(page.evaluate(
+            "() => { var el = document.querySelector('.md-recent-tabs__toast');"
+            " return !!el && el.classList.contains('is-visible'); }"),
+            "给出可见提示，而不是静默删标签")
         t.check(page.evaluate("!!document.querySelector('.md-tab[data-id=\"S5\"]')"),
                 "其余标签不受影响")
+        # × 仍然可以手动移除待定标签
+        page.click('.md-tab[data-id="S1"] .md-tab__close')
+        page.wait_for_selector('.md-tab[data-id="S1"]', state="detached", timeout=2000)
+        t.check(True, "待定标签可由用户手动 × 关闭")
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "core_switch_missing")

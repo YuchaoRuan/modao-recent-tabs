@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<!--
+  模拟墨刀企业版「设计文件页」——**左侧画布栏按需渲染（虚拟滚动）**版本。
+
+  用途：复现「多个标签时点击标签 → 标签被自动关闭且画布未切换」BUG。
+  与 mock-modao-design.html 的区别：
+    - 左侧画布栏为虚拟化长列表（40 页 + 折叠文件夹），
+      只有进入（接近）视口的行才真正存在于 DOM —— 与真实墨刀长列表一致。
+      因此 `document.querySelector('div.rn-list-item[data-cid="X"]')`
+      对未渲染的行必然返回 null，而该画布其实完好存在。
+    - 点击左侧项会触发整栏重渲染（模拟墨刀 SPA 重绘），节点被替换。
+    - 折叠文件夹「归档」内的画布默认不在 DOM 中（模拟文件夹折叠）。
+
+  其余结构（app-shell / 工具栏 / .canvas-title / 右面板）与基础夹具保持一致，
+  以便 A2 布局避让逻辑同样适用。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .app-shell { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
+    .app-header {
+      position: relative; top: 0; left: 0; right: 0; height: 48px;
+      background: #fff; border-bottom: 1px solid #e5e7eb;
+      display: flex; align-items: center; padding: 0 16px; z-index: 100;
+    }
+    .app-header .logo { font-weight: 700; color: #2d7ff9; }
+    .rn-sidebar {
+      position: absolute; top: 48px; left: 0; width: 220px; bottom: 0;
+      background: #f7f8fa; border-right: 1px solid #e5e7eb;
+      padding: 8px; display: flex; flex-direction: column;
+    }
+    /* 虚拟滚动视口：只有视口内的行会真正渲染到 DOM */
+    .rn-virtual { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; }
+    .rn-list-item {
+      height: 32px; line-height: 16px; padding: 8px 10px; border-radius: 6px;
+      margin-bottom: 4px; cursor: pointer; font-size: 13px; color: #1f2329;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .rn-list-item:hover { background: #eef3ff; }
+    .rn-list-item.is-active { background: #eef3ff; color: #2d7ff9; font-weight: 600; }
+    .rn-list-item.folder { color: #646a73; font-style: italic; }
+    .rn-canvas { position: absolute; top: 48px; left: 220px; right: 220px; bottom: 0; padding: 24px; }
+    .rn-right-panel {
+      position: absolute; top: 48px; right: 0; width: 220px; bottom: 0;
+      background: #f7f8fa; border-left: 1px solid #e5e7eb; padding: 8px; overflow: auto;
+    }
+    .canvas-title { font-size: 18px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="app-header styles__StyledTopBar-sc-121m7wg-0 jBNgew" role="banner">
+      <span class="logo">墨刀 · 内网（虚拟滚动长列表）</span>
+    </div>
+
+    <aside class="rn-sidebar">
+      <div class="rn-virtual" id="rn-virtual"></div>
+    </aside>
+
+    <main class="rn-canvas">
+      <div class="canvas-title">页面 01</div>
+      <div>画布编辑区（模拟）</div>
+    </main>
+
+    <aside class="rn-right-panel">
+      <div class="canvas-title">属性面板</div>
+      <div>右侧检查器（模拟）</div>
+    </aside>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+    var ROW_H = 36;               // 32px 行高 + 4px 间距
+    var PAGES = [];
+    for (var i = 1; i <= 40; i++) {
+      var n = i < 10 ? "0" + i : String(i);
+      PAGES.push({ cid: "P" + n, name: "页面 " + n });
+    }
+    var ARCH = [
+      { cid: "A1", name: "归档-旧首页" },
+      { cid: "A2", name: "归档-旧订单" },
+      { cid: "A3", name: "归档-旧登录" }
+    ];
+
+    var state = { active: "P01", archOpen: false, clicks: {} };
+    var vp = document.getElementById("rn-virtual");
+    var titleEl = document.querySelector(".rn-canvas .canvas-title");
+
+    function rows() {
+      var r = [{ kind: "folder", cid: "FARCH", name: "归档" + (state.archOpen ? "（展开）" : "（折叠）") }];
+      if (state.archOpen) r = r.concat(ARCH);
+      return r.concat(PAGES);
+    }
+
+    // 虚拟渲染：只把 [first, last] 区间的行真正挂到 DOM
+    function render() {
+      var all = rows();
+      var scrollTop = vp.scrollTop;
+      var vh = vp.clientHeight || 600;
+      var first = Math.max(0, Math.floor(scrollTop / ROW_H) - 1);
+      var last = Math.min(all.length - 1, first + Math.ceil(vh / ROW_H) + 2);
+      var html = "";
+      if (first > 0) html += '<div style="height:' + (first * ROW_H) + 'px"></div>';
+      for (var i = first; i <= last; i++) {
+        var it = all[i];
+        var cls = "rn-list-item" + (it.kind === "folder" ? " folder" : "") +
+                  (it.cid === state.active ? " is-active" : "");
+        html += '<div class="' + cls + '" data-cid="' + it.cid + '">' + it.name + "</div>";
+      }
+      var tail = all.length - 1 - last;
+      if (tail > 0) html += '<div style="height:' + (tail * ROW_H) + 'px"></div>';
+      vp.innerHTML = html;
+    }
+
+    vp.addEventListener("scroll", function () { render(); });
+
+    vp.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var item = t.closest(".rn-list-item[data-cid]");
+      if (!item) return;
+      var cid = item.getAttribute("data-cid");
+      state.clicks[cid] = (state.clicks[cid] || 0) + 1;
+      if (item.classList.contains("folder")) {
+        state.archOpen = !state.archOpen;
+        render();
+        return;
+      }
+      state.active = cid;
+      var all = rows();
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].cid === cid) { titleEl.textContent = all[i].name; break; }
+      }
+      render();   // 模拟墨刀 SPA 重绘：节点被替换
+    });
+
+    // 初始滚动到「已激活」页，模拟墨刀打开文件时把当前画布滚入视口
+    function scrollToCid(cid) {
+      var all = rows();
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].cid === cid) { vp.scrollTop = Math.max(0, (i - 2) * ROW_H); return; }
+      }
+    }
+
+    window.__mock = {
+      state: state,
+      render: render,
+      rows: rows,
+      scrollToCid: scrollToCid,
+      setActive: function (cid) { state.active = cid; render(); },
+      getClicks: function () { return state.clicks; },
+      inDom: function (cid) { return !!vp.querySelector('.rn-list-item[data-cid="' + cid + '"]'); }
+    };
+    render();
+  })();
+  </script>
+</body>
+</html>
