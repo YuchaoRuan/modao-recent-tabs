@@ -1,5 +1,6 @@
 /* =========================================================================
- * v1.0.13 找不到画布时自动重定位：优先用左侧搜索框清空/按名检索把目标带回 DOM，
+ * v1.0.14 切换成功后不再自动恢复原检索词（搜索框保持空态 = 全量列表）；
+ * v1.0.13 自动重定位：优先用左侧搜索框清空/按名检索把目标带回 DOM，
  *         彻底失败才走 v1.0.12 的滚动扫描 + 不可达提示兜底链（见 locateCanvas）。
  * 墨刀企业版（内网）「最近画布」— 共享核心逻辑
  * 浏览器扩展内容脚本与桌面注入共用，由 content.js / recent-tabs-bootstrap.js 调用。
@@ -274,6 +275,9 @@
     //   情形一  搜索框有词 → 先清空恢复全量列表，轮询目标是否回到 DOM；
     //   情形二  仍找不到（或搜索框本就为空）→ 把目标名写入搜索框触发墨刀检索
     //           （跨文件夹命中），命中即切换；
+    //   切换成功 → 搜索框保持空态（全量列表），**不再自动恢复**原检索词
+    //           （需求调整 2026-09-07：恢复原词会让列表立刻回到过滤态，
+    //            刚打开的画布若不含该词随即移出视口，用户会误以为没切过去）；
     //   全部失败 → 还原搜索现场后调 fail()（= 滚动扫描 + 不可达提示，v1.0.12 语义）。
     // 仅当「探测到搜索框」才进入；探测不到的环境（历史夹具 / 墨刀改版）直接 fail()。
     function locateCanvas(id, name, fail) {
@@ -292,8 +296,9 @@
           try { box.focus(); } catch (e) {}
         }
       }
-      // 还原用户的搜索上下文：空原值 = 保持清空（全量列表）；
-      // 非空 = 恢复原搜索词（恢复动作放在切换**之后**，避免又把它过滤掉）。
+      // 还原搜索现场：仅用于**彻底失败**兜底（空原值 = 保持清空/全量列表；
+      // 非空 = 恢复原搜索词，别把用户没定位成功前的检索上下文弄丢）。
+      // 切换**成功**路径不调用（见 succeed：成功后不恢复原检索词）。
       function restoreSearch() {
         try { setSearchValue(box, originalValue); } catch (e) {}
       }
@@ -301,7 +306,13 @@
         if (token !== revealToken) return;
         activateCanvas(id, name, el);
         finish();
-        restoreSearch();
+        // 需求调整（2026-09-07）：切换成功后**不自动恢复**原检索词——若把原词
+        // 写回，列表立即回到过滤态，刚打开的画布（往往不含该词）又被移出 DOM，
+        // 用户会误以为没切过去。故成功后搜索框统一保持/回到空态 = 全量列表；
+        // 情形二注入的临时「目标名前缀」检索词也在此一并清掉，不留残留。
+        if (box.value) {
+          try { setSearchValue(box, ""); } catch (e) {}
+        }
       }
       function allFailed() {
         if (token !== revealToken) return;
@@ -702,6 +713,12 @@
         var el = nodes[i];
         if (el.id === "md-recent-tabs-root") continue;
         if (typeof el.className === "string" && /md-recent-tabs/.test(el.className)) continue;
+        // 置顶(above)+固定模式会把墨刀工具栏整条下沉 44px（marginTop，见 updateOffset），
+        // 此时工具栏**内部**的相对/绝对子行（图标条/按钮容器，view 顶边随之下移到 ≈44~52）
+        // 会被下面的「顶边贴近 naturalBottom(48)±4」误判为内容区而遭 A2 整体下推 + 高度收缩，
+        // 表现为墨刀原生操作按钮/图标被压扁、推离工具栏框架（“操作栏下移、图标较大偏移”）。
+        // 修复：工具栏自身及其内部一切节点绝不参与 A2 内容下推（A2 只应作用于工具栏**之下**的区域）。
+        if (toolbarEl && (el === toolbarEl || toolbarEl.contains(el))) continue;
         var cs = getComputedStyle(el);
         if (cs.position !== "absolute" && cs.position !== "relative") continue;
         var r = el.getBoundingClientRect();

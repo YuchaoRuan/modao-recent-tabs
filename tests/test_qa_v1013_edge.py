@@ -5,18 +5,19 @@ tests/test_qa_v1013_edge.py — QA（严过关）对 v1.0.13「搜索框自动�
 与工程师自测（test_relocate_search.py R1-R5）的关系：
   - 不复用同一批交互脚本，独立从零构造；关键场景用**真实鼠标事件**（page.mouse）
     而非 JS .click()，验证底层事件链（mousedown/mouseup/click → onSwitch）。
-  - 重点补强竞态与边界：命中分支竞态、双需定位连点、原搜索词还原语义、
-    fallback 还原、destroy 时在飞 locate 轮询无残留、双载体一致、命中路径无副作用。
+  - 重点补强竞态与边界：命中分支竞态、双需定位连点、定位成功后不还原原词语义
+    （需求调整 2026-09-07）、fallback 还原（失败路径仍还原原词）、destroy 时在飞
+    locate 轮询无残留、双载体一致、命中路径无副作用。
 
 场景（Q1-Q7）：
   Q1 命中分支竞态（最关键）：搜索态点 A（需 locateCanvas 清空定位，轮询在飞）
      → 150ms 内真实鼠标再点「立即命中」的 B → 最终必须停在 B；
      A 的异步轮询不得把画面切回 A。直接检验 onSwitch 入口统一 revealToken++ 是否仍在。
-  Q2 还原语义：原搜索词 W 非空，点被过滤的标签定位成功 → 搜索框恢复为 W、
-     stale 标记清除、列表回到原过滤态（真实鼠标）。
+  Q2 成功不还原语义：原搜索词 W 非空，点被过滤的标签定位成功 → 搜索框**保持清空**
+     （W 不自动回来）、stale 标记清除、列表保持全量（真实鼠标）。
   Q3 连点两个都需定位的标签（A、B 均不在 DOM）→ 停在最后点的 B，A 不误切换。
   Q4 目标名写入搜索框仍找不到（原搜索词非空 + 画布已删除）→ fallback：
-     标签保持 stale + toast + 搜索框被清回原值。
+     标签保持 stale + toast + 搜索框被清回原值（失败路径仍还原）。
   Q5 destroy 时在飞 locate 轮询无残留：删除画布 → 点标签触发 locate（2s 预算在飞）
      → destroy → 无遗留 setTimeout/interval、document 监听归零、可重新 create。
   Q6 双载体一致：扩展载体（content.js）vs 桌面载体（recent-tabs-bootstrap.js）
@@ -261,9 +262,9 @@ def test_q1_hit_branch_race_real_mouse(browser, base):
         t.check("c004" in after and "c006" in after, "两个标签均保留 (%s)" % after)
         t.check(not is_stale(page, "c006"), "B 未被标记为待定")
         t.check(not is_stale(page, "c004"), "A 回到 DOM 后待定标记已被自动撤销")
-        # 观察项（不强制）：竞态中 A 的清空未走完 restore 链，原词可能丢失——仅记录，不判失败
-        t.check(search_value(page) in ("", "航班"),
-                "搜索框处于稳定值（清空后保持空 或 被还原为原词）: %r" % search_value(page))
+        # 新语义（2026-09-07）：A 的 locate 被 B 取代而取消，其清空动作已把搜索框
+        # 置空，且成功路径不再恢复原词 → 最终稳定为空态（全量列表）
+        t.eq(search_value(page), "", "A 的定位被取消后搜索框保持清空（原词「航班」不恢复）")
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "v1013_q1")
@@ -272,11 +273,11 @@ def test_q1_hit_branch_race_real_mouse(browser, base):
     return t
 
 
-# ---------------------------------------------------------------- Q2 还原语义
-def test_q2_search_restore_semantics(browser, base):
-    """还原语义：原搜索词 W=航班，点被过滤的 c002（新增修改说明）定位成功
-    → 搜索框恢复为 W、stale 标记清除、列表回到原过滤态。真实鼠标。"""
-    t = Tester("Q2 定位成功后还原原搜索词 + stale 清除 + 列表回过滤态")
+# ---------------------------------------------------------------- Q2 成功不还原语义
+def test_q2_success_no_restore_semantics(browser, base):
+    """新语义（2026-09-07）：原搜索词 W=航班，点被过滤的 c002（新增修改说明）定位成功
+    → 搜索框**保持清空**（W 不自动回来）、stale 标记清除、列表保持全量。真实鼠标。"""
+    t = Tester("Q2 定位成功后不再还原原检索词：搜索框清空 + stale 清除 + 列表全量")
     ctx, page = new_page(browser)
     try:
         boot(page, base)
@@ -291,15 +292,15 @@ def test_q2_search_restore_semantics(browser, base):
         real_click_tab(page, "c002")
         page.wait_for_timeout(1000)
 
-        t.eq(search_value(page), "航班", "切换后搜索框恢复原搜索词「航班」")
+        t.eq(search_value(page), "", "切换后搜索框保持清空（原检索词「航班」未自动回来）")
         t.eq(title_of(page), "新增修改说明", "画布已切到「新增修改说明」")
         t.eq(active_tab(page), "c002", "c002 激活态正确")
         t.check(clicks_of(page, "c002") > c2_before,
                 "c002 经自动定位被真实点击 (%d → %d)" % (c2_before, clicks_of(page, "c002")))
         t.check(not is_stale(page, "c002"), "定位成功后待定标记已清除")
         vis = visible_cids(page)
-        t.check("c002" not in vis and "c008" in vis,
-                "列表回到原过滤态（c002 不在、航班相关项在） (vis=%s)" % vis)
+        t.check("c002" in vis and len(vis) == 16,
+                "列表保持全量（c002 可见、16 项全在列），未回到原过滤态 (vis=%s)" % vis)
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "v1013_q2")
@@ -330,7 +331,7 @@ def test_q3_both_need_locate_stop_at_last(browser, base):
         real_click_tab(page, "c004")        # A：清空 + 轮询在飞
         page.wait_for_timeout(150)
         real_click_tab(page, "c002")        # B：同样需定位，应取代 A 成为赢家
-        page.wait_for_timeout(2400)         # 等 B 的 locate 完成 + 原值还原 + stale 复核
+        page.wait_for_timeout(2400)         # 等 B 的 locate 完成 + stale 复核
 
         t.eq(active_tab(page), "c002", "最终激活标签应为最后点击的 B(c002)")
         t.eq(title_of(page), "新增修改说明", "最终画布应为 B")
@@ -343,6 +344,8 @@ def test_q3_both_need_locate_stop_at_last(browser, base):
         t.check("c004" in after and "c002" in after, "两个标签均保留 (%s)" % after)
         t.check(not is_stale(page, "c002"), "B 无待定标记")
         t.check(not is_stale(page, "c004"), "A 回到 DOM 后待定标记自动撤销")
+        # 新语义：B 定位成功后原检索词「航班」不恢复，搜索框保持清空
+        t.eq(search_value(page), "", "切换成功后搜索框保持清空（原词「航班」不恢复）")
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "v1013_q3")
@@ -547,7 +550,7 @@ def main():
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
             total_fails += test_q1_hit_branch_race_real_mouse(browser, base).summary()
-            total_fails += test_q2_search_restore_semantics(browser, base).summary()
+            total_fails += test_q2_success_no_restore_semantics(browser, base).summary()
             total_fails += test_q3_both_need_locate_stop_at_last(browser, base).summary()
             total_fails += test_q4_name_search_fails_fallback_restores(browser, base).summary()
             total_fails += test_q5_destroy_during_locate_clean(browser, base).summary()

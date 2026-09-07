@@ -10,7 +10,8 @@ tests/test_relocate_search.py — v1.0.13「找不到画布时自动重定位」
 
 覆盖用例：
   R1 搜索过滤态点其它画布标签 → 自动清空 → 目标标签保留、画布完成切换、激活态正确
-  R2 切换后搜索框恢复为原搜索词，列表回到原过滤态
+  R2 切换成功后**不再自动恢复**原检索词：搜索框保持清空、列表保持全量
+     （需求调整 2026-09-07：原词恢复会让刚打开的画布又被过滤移出视口）
   R3 输入目标名仍找不到的极端场景 → 标签保持 stale 不消失 + toast 出现
   R4 清空轮询期间的连点竞态：点 A（需清空轮询）后 200ms 内点 B → 最终停在 B
   R5 命中即切换路径仍正常（非搜索态不回归）
@@ -171,7 +172,7 @@ def test_r1_search_clear_switches(browser, base):
 
         before = clicks_of(page, "c004")
         click_tab(page, "c004")            # 搜索态点目标画布标签 → 自动清空定位
-        page.wait_for_timeout(900)         # 清空(~120ms) + 轮询命中 + 恢复原词(~120ms)
+        page.wait_for_timeout(900)         # 清空(~120ms) + 轮询命中（成功后不再恢复原词）
 
         after = tab_ids(page)
         t.check("c004" in after, "切换后 c004 标签保留 (tabs=%s)" % after)
@@ -182,6 +183,11 @@ def test_r1_search_clear_switches(browser, base):
         t.eq(title_of(page), "订单详情退款", "画布标题已切到「订单详情退款」")
         t.eq(active_tab(page), "c004", "c004 标签变为激活态")
         t.check(not is_stale(page, "c004"), "定位成功后待定标记已清除")
+        # 新语义：切换成功后原检索词「航班」不自动写回，搜索框保持空态、列表为全量
+        t.eq(search_value(page), "", "切换后搜索框保持清空（原检索词「航班」未自动回来）")
+        vis = visible_cids(page)
+        t.check(len(vis) == 16 and "c004" in vis,
+                "列表保持全量（16 项、目标 c004 可见，未被原词再次过滤） (vis=%s)" % vis)
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "relocate_r1")
@@ -191,8 +197,11 @@ def test_r1_search_clear_switches(browser, base):
 
 
 # ---------------------------------------------------------------- R2
-def test_r2_search_term_restored(browser, base):
-    t = Tester("R2 切换完成后搜索框恢复原搜索词、列表回到原过滤态")
+def test_r2_search_term_not_restored(browser, base):
+    """新语义（2026-09-07）：切换成功后不自动恢复原检索词。搜索「航班」过滤掉
+    c002 → 点 c002 标签自动清空定位切换 → 搜索框保持为空、列表保持全量
+    （刚打开的画布 c002 可见，不被原词再次过滤移出视口）。"""
+    t = Tester("R2 切换成功后不恢复原检索词：搜索框清空、列表保持全量")
     ctx, page = new_page(browser)
     try:
         boot(page, base)
@@ -207,13 +216,13 @@ def test_r2_search_term_restored(browser, base):
         click_tab(page, "c002")
         page.wait_for_timeout(900)
 
-        # 实现语义：切换后把搜索框恢复为原搜索词（用户检索上下文被保留）
-        t.eq(search_value(page), "航班", "切换后搜索框恢复原搜索词「航班」")
+        # 实现语义：切换成功后不再把原检索词写回（搜索框保持空态 + 列表全量）
+        t.eq(search_value(page), "", "切换后搜索框保持清空（原检索词「航班」未自动回来）")
         t.eq(title_of(page), "新增修改说明", "画布已切到「新增修改说明」")
         t.eq(active_tab(page), "c002", "c002 激活态正确")
         vis = visible_cids(page)
-        t.check("c002" not in vis and "c008" in vis,
-                "列表回到原过滤态（c002 不在、航班相关项在） (vis=%s)" % vis)
+        t.check("c002" in vis and len(vis) == 16,
+                "列表为全量（c002 可见、16 项全部在列），未回到原过滤态 (vis=%s)" % vis)
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "relocate_r2")
@@ -266,7 +275,7 @@ def test_r3_search_by_name_fails(browser, base):
 # ---------------------------------------------------------------- R4
 def test_r4_race_clear_polling(browser, base):
     """清空轮询期间的连点竞态：
-    搜索「航班」过滤掉 A(c004)；点 A → 清空轮询尚未结束（恢复被延迟到 600ms）；
+    搜索「航班」过滤掉 A(c004)；点 A → 清空尚未完成（延迟 600ms）；
     200ms 内再点 B(c006，此刻仍在旧过滤列表中、立即命中) → A 的轮询命中后
     不得覆盖 B，最终必须停在 B。"""
     t = Tester("R4 清空轮询期间连点（A 需轮询 / B 立即可见）→ 最终停在 B")
@@ -284,7 +293,7 @@ def test_r4_race_clear_polling(browser, base):
         t.check(in_dom(page, "c006") is True, "前置：B(c006) 在过滤结果中")
 
         c4_before = clicks_of(page, "c004")
-        click_tab(page, "c004")            # A：触发清空 + 轮询（恢复 600ms 后才渲染出 A）
+        click_tab(page, "c004")            # A：触发清空 + 轮询（600ms 后全量列表才渲染出 A）
         page.wait_for_timeout(200)
         click_tab(page, "c006")            # B：立即命中（旧过滤列表里 B 仍在 DOM）
         page.wait_for_timeout(1600)        # 等 A 的轮询彻底跑完/被取消
@@ -343,7 +352,7 @@ def main():
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
             total_fails += test_r1_search_clear_switches(browser, base).summary()
-            total_fails += test_r2_search_term_restored(browser, base).summary()
+            total_fails += test_r2_search_term_not_restored(browser, base).summary()
             total_fails += test_r3_search_by_name_fails(browser, base).summary()
             total_fails += test_r4_race_clear_polling(browser, base).summary()
             total_fails += test_r5_hit_path_unchanged(browser, base).summary()
