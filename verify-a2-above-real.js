@@ -1,21 +1,18 @@
-/* verify-a2-above-real.js — 真实墨刀「上方模式(above)」A2 避让核验探针（v1.0.8）
+/* verify-a2-above-real.js — 真实墨刀「上方模式(above)」A2 避让核验探针（v1.0.8，v1.0.15 起恒 above）
  *
- * 面向核心补丁：recent-tabs-core.js v1.0.8（新增 above/below 位置可配置）
- * 本探针不改变 verify-a2-real.js 的 v1.0.7 基线语义，仅在其上叠加 above 模式专属核验：
- *   - 读取 localStorage['md_tabbar_position'] 判定当前位置模式（above / below / 默认 below）
- *   - above 模式专属断言：标签栏贴顶(bar.top≈0)、固定模式工具栏下沉(marginTop=44px, 视口 top≈44)
+ * 面向核心补丁：v1.0.15 起标签栏位置固定「工具栏上方」(always above)，不再有 above/below 切换；
+ * 本探针专核 above 布局语义：
+ *   - 标签栏贴顶(bar.top≈0)、固定模式工具栏下沉(marginTop=44px, 视口 top≈44)
  *   - 漏推扫描基线修正为 naturalBottom=48（above+fixed 工具栏下沉后 live hb 变 92，
  *     但内容命中的「自然底边」恒为下沉前的 48，避免误判漏推——对应核心 naturalBottom 修复 R1/R5）
  *   - 保留 v1.0.7 的「重排存活自检」：resize 触发 refreshLayout 后自动复检下推是否存活
  *
  * 用法：
- *   1. 已对墨刀 resources/app.asar 应用 v1.0.8 补丁并彻底重启墨刀（含托盘退出）。
+ *   1. 已对墨刀 resources/app.asar 应用 v1.0.15 补丁并彻底重启墨刀（含托盘退出）。
  *   2. 打开任一设计文件页 http://<host>/proto/design/<cid> 并登录。
  *   3. 确保顶部「最近画布」标签栏处于【固定(pinned)】模式（class 含 is-float 表示浮动，属正常不下推）。
- *   4. （可选）先在设置页把「标签栏位置」切到「上方」，或控制台执行
- *      localStorage.setItem('md_tabbar_position','above') 后刷新本页以验证上方模式。
- *   5. F12 → Console，把本文件全部内容粘贴进去回车。
- *   6. 把控制台打印的两段 JSON（「A2 上方模式核验」+「A2 重排存活自检」）一并发回。
+ *   4. F12 → Console，把本文件全部内容粘贴进去回车。
+ *   5. 把控制台打印的两段 JSON（「A2 上方模式核验」+「A2 重排存活自检」）一并发回。
  */
 (function () {
   function rectOf(el) { return el.getBoundingClientRect(); }
@@ -50,10 +47,8 @@
     return;
   }
 
-  // 位置模式（above / below）
-  var positionMode = "below";
-  try { positionMode = localStorage.getItem("md_tabbar_position") || "below"; } catch (e) {}
-  if (positionMode !== "above") positionMode = "below";
+  // 位置模式（v1.0.15 起固定「工具栏上方」，历史 md_tabbar_position 值不再读取）
+  var positionMode = "above";
 
   var isFloat = bar.classList.contains("is-float");
   var barRect = rectOf(bar);

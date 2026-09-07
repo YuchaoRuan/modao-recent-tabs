@@ -572,17 +572,22 @@ def test_duplicate_name_both_clicks(browser, base):
 
 
 def test_toolbar_avoidance(browser, base):
-    """顶部工具栏避让（修复「标签栏遮挡墨刀工具栏」）：
+    """v1.0.15 标签栏固定显示在墨刀工具栏上方（always above，不再可切下方）：
     fixture 工具栏为 styled-components 风格 div（styles__StyledTopBar-…，模拟真实墨刀），
-    高度 48px；标签栏 top 应下移至 48px、body padding-top = 44+48 = 92px，不再压住工具栏。"""
-    t = Tester("标签栏避让顶部工具栏（fixed 模式）")
+    高度 48px；标签栏贴顶 top=0、工具栏 marginTop 下沉 44px（视口 top=44）、
+    body padding-top = 44+48 = 92px，内容不被标签栏遮挡。"""
+    t = Tester("标签栏固定工具栏上方（above+fixed 避让）")
     ctx, page = new_page(browser)
     try:
         page.goto(base + "/proto/design/" + CID, wait_until="load")
         inject_and_create(page, CID, HIST, active_cid="S5")
         page.wait_for_selector(".md-recent-tabs")
         top = page.evaluate("document.querySelector('.md-recent-tabs').style.top")
-        t.eq(top, "48px", "标签栏 top 下移至工具栏底部 48px (got=%r)" % top)
+        t.eq(top, "0px", "标签栏贴顶 top=0px（工具栏上方）(got=%r)" % top)
+        tb_mt = page.evaluate("document.querySelector('.app-header').style.marginTop")
+        t.eq(tb_mt, "44px", "墨刀工具栏 marginTop=44px（下沉避让）(got=%r)" % tb_mt)
+        tb_top = page.evaluate("document.querySelector('.app-header').getBoundingClientRect().top")
+        t.eq(round(tb_top), 44, "工具栏视口 top 落至 44（标签栏之下）(got=%r)" % tb_top)
         pad = page.evaluate("getComputedStyle(document.body).paddingTop")
         t.eq(pad, "92px", "body padding-top = 44+48 (got=%r)" % pad)
     except Exception as e:
@@ -594,7 +599,8 @@ def test_toolbar_avoidance(browser, base):
 
 
 def test_toolbar_ignores_mid_page(browser, base):
-    """页面中部 fixed 元素不参与避让（只认视口顶部 60px 内的横带）。"""
+    """页面中部 fixed 元素不参与避让（只认视口顶部 60px 内的横带）；
+    标签栏恒贴顶 top=0，不受中部元素影响。"""
     t = Tester("页面中部固定元素不干扰避让")
     ctx, page = new_page(browser)
     try:
@@ -609,7 +615,7 @@ def test_toolbar_ignores_mid_page(browser, base):
         )
         page.wait_for_timeout(200)  # 等 rAF + refreshLayout 消化
         top = page.evaluate("document.querySelector('.md-recent-tabs').style.top")
-        t.eq(top, "48px", "中部固定元素(top=200)不抬高避让高度 (got=%r)" % top)
+        t.eq(top, "0px", "中部固定元素(top=200)不改变贴顶 top=0 (got=%r)" % top)
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "core_toolbar_mid")
@@ -619,8 +625,9 @@ def test_toolbar_ignores_mid_page(browser, base):
 
 
 def test_toolbar_height_change(browser, base):
-    """工具栏高度变化（SPA 重渲染/尺寸调整）→ 2s 轮询动态重测并刷新避让。"""
-    t = Tester("工具栏高度变化后动态刷新避让")
+    """工具栏高度变化（SPA 重渲染/尺寸调整）→ 2s 轮询动态重测：body padding 跟随刷新，
+    标签栏恒贴顶 top=0（贴顶与工具栏高度无关）。"""
+    t = Tester("工具栏高度变化后 body padding 刷新、标签栏仍贴顶")
     ctx, page = new_page(browser)
     try:
         page.goto(base + "/proto/design/" + CID, wait_until="load")
@@ -629,10 +636,10 @@ def test_toolbar_height_change(browser, base):
         # 改工具栏高度 48 → 60（style 变化不触发 MO childList，靠 2s 轮询 refreshLayout）
         page.evaluate("document.querySelector('.app-header').style.height='60px'")
         page.wait_for_function(
-            "document.querySelector('.md-recent-tabs').style.top === '60px'", timeout=4500
+            "getComputedStyle(document.body).paddingTop === '104px'", timeout=4500
         )
         top = page.evaluate("document.querySelector('.md-recent-tabs').style.top")
-        t.eq(top, "60px", "高度变 60px 后标签栏 top 跟随 (got=%r)" % top)
+        t.eq(top, "0px", "工具栏高度变 60px 后标签栏仍贴顶 top=0px (got=%r)" % top)
         pad = page.evaluate("getComputedStyle(document.body).paddingTop")
         t.eq(pad, "104px", "body padding-top 刷新为 44+60=104px (got=%r)" % pad)
     except Exception as e:
@@ -657,7 +664,7 @@ def test_detect_header_relative_toolbar(browser, base):
         page.evaluate("document.querySelector('.app-header').style.position='relative'")
         page.wait_for_timeout(2200)  # 等 2s 轮询 refreshLayout 重测
         top = page.evaluate("document.querySelector('.md-recent-tabs').style.top")
-        t.eq(top, "48px", "relative 工具栏 → 标签栏 top=48px (got=%r)" % top)
+        t.eq(top, "0px", "relative 工具栏 → 标签栏仍贴顶 top=0px (got=%r)" % top)
         pad = page.evaluate("getComputedStyle(document.body).paddingTop")
         t.eq(pad, "92px", "relative 工具栏 → body padding-top=92px (got=%r)" % pad)
     except Exception as e:
@@ -669,9 +676,9 @@ def test_detect_header_relative_toolbar(browser, base):
 
 
 def test_content_offset_fixed_pushes_canvas(browser, base):
-    """A2（v1.0.6 扩展）：fixed 模式标签栏占据 48–92，画布视口与各侧栏面板
-    (.rn-canvas / .rn-sidebar / .rn-right-panel) 应整体下推 TAB_H(44)，使其始于标签栏之下，
-    toolbar(0–48) 不受影响。"""
+    """A2（v1.0.6 扩展，v1.0.15 固定上方布局）：标签栏贴顶(0–44)、墨刀工具栏下沉(44–92)，
+    画布视口与各侧栏面板(.rn-canvas / .rn-sidebar / .rn-right-panel) 应整体下推 TAB_H(44)，
+    使其始于标签栏之下、toolbar 之下（content top=92 / marginTop=44px）。"""
     t = Tester("A2 fixed 模式：画布与左右面板内容下推避让标签栏")
     ctx, page = new_page(browser)
     try:
@@ -679,14 +686,16 @@ def test_content_offset_fixed_pushes_canvas(browser, base):
         inject_and_create(page, CID, HIST, active_cid="S5")
         page.wait_for_selector(".md-recent-tabs")
         top = page.evaluate("document.querySelector('.md-recent-tabs').style.top")
-        t.eq(top, "48px", "标签栏 top=48 (got=%r)" % top)
+        t.eq(top, "0px", "标签栏贴顶 top=0 (got=%r)" % top)
         for sel in [".rn-canvas", ".rn-sidebar", ".rn-right-panel"]:
             cv_top = page.evaluate("document.querySelector('%s').getBoundingClientRect().top" % sel)
-            t.eq(round(cv_top), 92, "%s top 下推至 92 (48+44) (got=%r)" % (sel, cv_top))
+            t.eq(round(cv_top), 92, "%s top 下推至 92 (44+48) (got=%r)" % (sel, cv_top))
             mt = page.evaluate("getComputedStyle(document.querySelector('%s')).marginTop" % sel)
             t.eq(mt, "44px", "%s marginTop=44px (got=%r)" % (sel, mt))
+        tb_mt = page.evaluate("document.querySelector('.app-header').style.marginTop")
+        t.eq(tb_mt, "44px", "toolbar 被下沉 marginTop=44px (got=%r)" % tb_mt)
         tb_top = page.evaluate("document.querySelector('.app-header').getBoundingClientRect().top")
-        t.eq(round(tb_top), 0, "toolbar 仍在视口顶部 0（未被下推）(got=%r)" % tb_top)
+        t.eq(round(tb_top), 44, "toolbar 视口 top=44（被标签栏让位下沉）(got=%r)" % tb_top)
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "core_a2_fixed")
@@ -899,42 +908,6 @@ def test_above_float_layout(browser, base):
     return t
 
 
-def test_above_position_toggle_message(browser, base):
-    """v1.0.8 设置页消息 MD_SET_TABBAR_POSITION 切换 above/below：
-    below（默认）→ bar.top=48、工具栏 marginTop=''；
-    above → bar.top=0、工具栏 marginTop='44px'（下沉）；
-    再 below → 还原。"""
-    t = Tester("上方/下方 切换消息 MD_SET_TABBAR_POSITION")
-    ctx, page = new_page(browser)
-    try:
-        page.goto(base + "/proto/design/" + CID, wait_until="load")
-        inject_and_create(page, CID, HIST, active_cid="S5")  # 默认 below + fixed
-        page.wait_for_selector(".md-recent-tabs")
-        # 初始（below）
-        bt0 = page.evaluate("document.querySelector('.md-recent-tabs').style.top")
-        t.eq(bt0, "48px", "初始 below：bar.top=48px (got=%r)" % bt0)
-        # 切 above
-        page.evaluate("window.__mdMsgListener({type:'MD_SET_TABBAR_POSITION', position:'above'}, {}, function(){});")
-        page.wait_for_timeout(80)
-        bt1 = page.evaluate("document.querySelector('.md-recent-tabs').style.top")
-        t.eq(bt1, "0px", "above：bar.top=0px（贴顶）(got=%r)" % bt1)
-        tb1 = page.evaluate("document.querySelector('.app-header').style.marginTop")
-        t.eq(tb1, "44px", "above：工具栏 marginTop=44px（下沉）(got=%r)" % tb1)
-        # 切回 below
-        page.evaluate("window.__mdMsgListener({type:'MD_SET_TABBAR_POSITION', position:'below'}, {}, function(){});")
-        page.wait_for_timeout(80)
-        bt2 = page.evaluate("document.querySelector('.md-recent-tabs').style.top")
-        t.eq(bt2, "48px", "below：bar.top 还原 48px (got=%r)" % bt2)
-        tb2 = page.evaluate("document.querySelector('.app-header').style.marginTop")
-        t.eq(tb2, "", "below：工具栏 marginTop 还原空（不再下沉）(got=%r)" % tb2)
-    except Exception as e:
-        t.check(False, "异常: %r" % e)
-        screenshot(page, "core_above_toggle")
-    finally:
-        ctx.close()
-    return t
-
-
 def main():
     httpd, base = start_server()
     total_fails = 0
@@ -951,7 +924,7 @@ def main():
                    test_content_offset_fixed_pushes_canvas, test_content_offset_float_clears,
                    test_content_offset_fixed_to_float_restores, test_content_offset_relayout_survives,
                    test_above_fixed_layout, test_above_relayout_survives,
-                   test_above_float_layout, test_above_position_toggle_message]:
+                   test_above_float_layout]:
                 total_fails += fn(browser, base).summary()
             # 汇总在收尾（Playwright stop / httpd shutdown）之前打印，避免收尾偶发阻塞吞掉结果
             print("\n==== 核心逻辑测试总计：%d 失败 ====" % total_fails)

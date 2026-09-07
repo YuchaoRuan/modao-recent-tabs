@@ -365,16 +365,6 @@
   background: var(--md-color-primary-soft-hover);
 }
 
-/* 位置切换按钮：贴顶态 = 标签栏在顶部 */
-.md-position-btn.is-above {
-  color: var(--md-color-primary);
-  background: var(--md-color-primary-soft);
-}
-
-.md-position-btn.is-above:hover {
-  background: var(--md-color-primary-soft-hover);
-}
-
 /* 浮动显示模式：默认滑出顶部隐藏，悬停顶部热区时滑入 */
 .md-recent-tabs.is-float {
   transform: translateY(calc(-100% - var(--md-hide-offset, 0px)));

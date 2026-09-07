@@ -1,4 +1,6 @@
 /* =========================================================================
+ * v1.0.15 取消「工具栏上方/下方」位置切换：标签栏固定显示在墨刀工具栏上方
+ *         （always above），固定/浮动图钉切换保持不变；
  * v1.0.14 切换成功后不再自动恢复原检索词（搜索框保持空态 = 全量列表）；
  * v1.0.13 自动重定位：优先用左侧搜索框清空/按名检索把目标带回 DOM，
  *         彻底失败才走 v1.0.12 的滚动扫描 + 不可达提示兜底链（见 locateCanvas）。
@@ -24,7 +26,6 @@
 
     var CLO  = "md_closed_screens";
     var DMODE = "md_display_mode";
-    var POS_KEY = "md_tabbar_position";
     var TOPBAR_H = 44;
 
     // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
@@ -465,7 +466,6 @@
 
     var bar = new RecentTabsBar(root, {
       max: 20,
-      showPositionToggle: true,   // 桌面端即时切换标签栏位置（写 localStorage + 重排）
       onSwitch: function (item) {
         if (!item || !item.id) return;
         var id = item.id;
@@ -513,18 +513,6 @@
         displayMode = displayMode === "float" ? "fixed" : "float";
         persistDisplayMode();
         applyDisplayMode();
-      },
-      onTogglePosition: function () {
-        // 即时切换标签栏位置：写 localStorage + chrome.storage（跨域可靠来源）+ 立即重排
-        positionMode = positionMode === "above" ? "below" : "above";
-        try { localStorage.setItem(POS_KEY, positionMode); } catch (e) {}
-        try {
-          if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.set({ tabbarPosition: positionMode });
-          }
-        } catch (e) {}
-        applyDisplayMode();   // 立即重排：bar.top / 工具栏下沉 / 内容下推 全部刷新
-        bar.setPosition(positionMode);
       }
     });
 
@@ -551,10 +539,9 @@
     var displayMode = "fixed";
     try { displayMode = localStorage.getItem(DMODE) || "fixed"; } catch (e) {}
     if (displayMode !== "float") displayMode = "fixed";
-
-    var positionMode = "below";
-    try { positionMode = localStorage.getItem(POS_KEY) || "below"; } catch (e) {}
-    if (positionMode !== "above") positionMode = "below";
+    // v1.0.15：标签栏位置固定「工具栏上方」(above) 无切换概念；
+    // 布局（bar 贴顶 / 工具栏下沉 / 内容下推）见 updateOffset。历史遗留的
+    // md_tabbar_position 值（含旧版存的 below）一律忽略，不再读取。
 
     var offsetStyle = null;
     var hotspot = null;
@@ -605,24 +592,21 @@
     // 与 displayMode 解耦：工具栏高度变化（SPA 重渲染）时只调本函数，不打断浮动显隐状态。
     function updateOffset(ti) {
       var isFloat = displayMode === "float";
-      var isAbove = positionMode === "above";
-      // above 时标签栏贴顶(top:0)、隐藏偏移为 0；below 置于工具栏「自然底边」之下。
-      // 必须用 naturalBottom 而非 live hb：above→below 切换瞬间工具栏仍带 44px 下沉(marginTop)，
-      // 此时 live hb=92，若据此定位会把 bar 放到 92px（压住未及还原的工具栏）；
-      // naturalBottom 恒为下沉前的 48，使 bar 正确回到工具栏自然底边、切换不跳变。
-      bar.barEl.style.top = isAbove ? "0px" : ti.naturalBottom + "px";
-      bar.barEl.style.setProperty("--md-hide-offset", isAbove ? "0px" : ti.naturalBottom + "px");
-      // 工具栏下沉用 marginTop（非 body padding），不触发反馈环；仅 above+fixed 下沉，below 与 above+float 清除
+      // v1.0.15：位置固定「工具栏上方」——标签栏恒贴顶(top:0)、浮动隐藏偏移为 0。
+      // 固定模式把墨刀工具栏整条下沉 TOPBAR_H(44px) 为其让位（marginTop，不触发
+      // 反馈环）；浮动模式不下沉。工具栏自然底边 naturalBottom 仍作内容命中基准。
+      bar.barEl.style.top = "0px";
+      bar.barEl.style.setProperty("--md-hide-offset", "0px");
       if (ti.el) {
         toolbarEl = ti.el;
-        ti.el.style.marginTop = (isAbove && !isFloat) ? (TOPBAR_H + "px") : "";
+        ti.el.style.marginTop = isFloat ? "" : (TOPBAR_H + "px");
       }
       if (!offsetStyle) {
         offsetStyle = document.createElement("style");
         offsetStyle.id = "md-recent-tabs-offset";
         document.head.appendChild(offsetStyle);
       }
-      // 顶部总占用：浮动模式仅工具栏(hb)；固定模式 bar(44)+工具栏自然高(48)=92（above/below 相同）
+      // 顶部总占用：浮动模式仅工具栏(hb)；固定模式 bar(44)+工具栏自然高(48)=92
       var reserved = isFloat ? ti.hb : (TOPBAR_H + ti.naturalBottom);
       offsetStyle.textContent = "body{padding-top:" + reserved + "px !important;}";
       if (hotspot) hotspot.style.height = (ti.hb > 0 ? ti.hb : 8) + "px";
@@ -653,7 +637,6 @@
     }
 
     applyDisplayMode();
-    bar.setPosition(positionMode);   // 同步位置切换按钮初始状态
     // 检测墨刀顶部工具栏高度（标签栏避让基准，修复「遮挡工具栏」BUG）。
     // 真实墨刀工具栏由 styled-components 生成（如 div.styles__StyledTopBar-xxx），
     // CSS 属性选择器必须用 [class*='...' i]（大小写不敏感）才能命中 StyledTopBar；
@@ -848,19 +831,6 @@
     // 来自设置页的消息（清除已关闭标签）：仅浏览器扩展侧启用
     if (enableMessageListener && typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
       chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-        if (msg && msg.type === "MD_SET_TABBAR_POSITION") {
-          var p = (msg.position === "above") ? "above" : "below";
-          try { localStorage.setItem(POS_KEY, p); } catch (e) {}
-          positionMode = p;
-          applyDisplayMode();   // 立即重排：bar.top / 工具栏下沉 / 内容下推 全部刷新
-          bar.setPosition(p);   // 同步位置切换按钮状态
-          if (typeof sendResponse === "function") sendResponse({ ok: true, position: p });
-          return false;
-        }
-        if (msg && msg.type === "MD_GET_TABBAR_POSITION") {
-          if (typeof sendResponse === "function") sendResponse({ ok: true, position: positionMode });
-          return false;
-        }
         if (msg && msg.type === "MD_CLEAR_CLOSED") {
           closed = [];
           persistClosed();
@@ -870,28 +840,6 @@
           if (typeof sendResponse === "function") sendResponse({ ok: true });
         }
         return false;
-      });
-    }
-
-    // 位置偏好：以 chrome.storage.local 为跨域可靠来源（选项页与内容脚本同源共享）。
-    // 选项页写入 storage，内容脚本经 storage.onChanged 实时套用，不再依赖一次性消息投递是否成功。
-    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged) {
-      function applyPositionFromStorage(newValue) {
-        if (newValue == null) return;
-        var p = (newValue === "above") ? "above" : "below";
-        try { localStorage.setItem(POS_KEY, p); } catch (e) {}
-        positionMode = p;
-        applyDisplayMode();   // 立即重排：bar.top / 工具栏下沉 / 内容下推 全部刷新
-        bar.setPosition(p);   // 同步位置切换按钮状态
-      }
-      try {
-        chrome.storage.local.get(["tabbarPosition"], function (s) {
-          if (s && s.tabbarPosition) applyPositionFromStorage(s.tabbarPosition);
-        });
-      } catch (e) {}
-      chrome.storage.onChanged.addListener(function (changes, area) {
-        if (area !== "local") return;
-        if (changes.tabbarPosition) applyPositionFromStorage(changes.tabbarPosition.newValue);
       });
     }
 

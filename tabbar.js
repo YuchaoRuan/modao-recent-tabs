@@ -23,9 +23,6 @@
     // 图钉（固定/浮动切换）
     pin:
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3H7l3-3z"/></svg>',
-    // 位置（顶部 / 工具栏下方）切换：上下双向箭头
-    position:
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16"/><path d="M8 8l4-4 4 4"/><path d="M8 16l4 4 4-4"/></svg>',
     // 提示（警告）：三角感叹号
     warn:
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.6 1.8 20.4h20.4z"/><path d="M12 9.4v4.3"/><path d="M12 17.2h.01"/></svg>'
@@ -54,8 +51,6 @@
     this.onClose = options.onClose || function () {};
     this.onCloseOthers = options.onCloseOthers || function () {};
     this.onTogglePin = options.onTogglePin || function () {};
-    this.onTogglePosition = options.onTogglePosition || function () {};
-    this.showPositionToggle = !!options.showPositionToggle;
     this.max = options.max || 20;
     // 标签节点复用表：id -> {el, labelEl, closeEl, item}。
     // 增量渲染（复用节点）而非每次 innerHTML 全量重建，避免点击过程中节点被替换导致 click 丢失。
@@ -115,19 +110,6 @@
     pinBtn.addEventListener("click", function () { self.onTogglePin(); });
     this.pinBtn = pinBtn;
 
-    // 位置切换按钮（桌面端即时切换标签栏位置；默认显示，可由 showPositionToggle 关闭）
-    var posBtn = null;
-    if (this.showPositionToggle) {
-      posBtn = document.createElement("button");
-      posBtn.type = "button";
-      posBtn.className = "md-icon-btn md-position-btn";
-      posBtn.setAttribute("aria-pressed", "false");
-      posBtn.title = "切换标签栏位置（顶部 / 工具栏下方）";
-      posBtn.innerHTML = ICONS.position;
-      posBtn.addEventListener("click", function () { self.onTogglePosition(); });
-      this.posBtn = posBtn;
-    }
-
     var closeOthersBtn = document.createElement("button");
     closeOthersBtn.className = "md-icon-btn";
     closeOthersBtn.title = "关闭其他画布";
@@ -136,7 +118,6 @@
 
     actions.appendChild(badge);
     actions.appendChild(pinBtn);
-    if (self.posBtn) actions.appendChild(self.posBtn);
     actions.appendChild(closeOthersBtn);
 
     bar.appendChild(brand);
@@ -229,17 +210,6 @@
     this.pinBtn.title = pinned
       ? "固定显示（点击切换为浮动）"
       : "浮动显示（点击切换为固定）";
-  };
-
-  // 设置位置切换按钮的视觉/无障碍状态（above=贴顶；below=工具栏下方）
-  RecentTabsBar.prototype.setPosition = function (mode) {
-    if (!this.posBtn) return;
-    var isAbove = mode === "above";
-    this.posBtn.classList.toggle("is-above", isAbove);
-    this.posBtn.setAttribute("aria-pressed", isAbove ? "true" : "false");
-    this.posBtn.title = isAbove
-      ? "标签栏在顶部（点击移至工具栏下方）"
-      : "标签栏在工具栏下方（点击移至顶部）";
   };
 
   RecentTabsBar.prototype.setItems = function (items) {
