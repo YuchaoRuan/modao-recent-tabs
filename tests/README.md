@@ -47,11 +47,12 @@ python tests/test_regression_tab_autoclose.py
 | 4 | 点 × 关闭标签 | `test_close_single`（关闭 + `md_closed_screens` 持久化 + 刷新后不再出现） |
 | 5 | 关闭其他画布 | `test_close_others`（仅留当前激活项） |
 | 6 | 画布列表下拉 | `test_dropdown`（徽标展开、列出画布、点项切换、选择收起） |
-| 7 | 图钉：固定/浮动显隐 | `test_pin_float`（浮动模式 + 滑出热点 + `body` padding + 持久化 `float`） |
+| 7 | 图钉：固定/浮动显隐 | `test_pin_float`（浮动模式 + 顶部边缘触发 + `body` padding + 持久化 `float`） |
 | 8 | 进入文件默认画布出现 | `test_default_canvas`（`is-active` 默认画布 + 历史画布均出现） |
 | 9 | SPA 跨设计文件切换 | `test_spa_switch`（`cid` 重置，不串号；真实扩展靠 2s 轮询 `refreshCid` 检测并重渲染） |
 | 10 | 清除已关闭标签 | `test_clear_closed`（扩展消息 `MD_CLEAR_CLOSED` → 恢复 + 清空记录） |
 | 11 | 演示页组件交互 | `test_demo`（渲染/切换/关闭/下拉，复用同一套 `tabbar.js`） |
+| 12 | 浮动模式不遮挡工具栏 | `test_float_toolbar_not_blocked`（v1.0.16 回归：无热区 div、`elementFromPoint` 命中工具栏、工具栏点击可达、悬停工具栏不误弹） |
 
 ## 测试中发现的行为说明（非缺陷，已据实断言）
 

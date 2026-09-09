@@ -215,15 +215,16 @@ def test_pin_float(browser, base):
         page.click(".md-pin-btn")
         t.check(page.evaluate("document.querySelector('.md-recent-tabs').classList.contains('is-float')"),
                 "点击图钉 → 进入浮动模式(is-float)")
-        t.check(page.evaluate("!!document.querySelector('.md-recent-tabs-hotspot')"),
-                "浮动模式创建滑出热点(hotspot)")
+        t.check(page.evaluate("!document.querySelector('.md-recent-tabs-hotspot')"),
+                "浮动模式不再注入热区 div（避免拦截墨刀工具栏点击）")
         t.eq(page.evaluate("localStorage.getItem('md_display_mode')"), "float", "显示模式持久化为 float")
         # 浮动模式通过注入的 <style id=md-recent-tabs-offset> 设置 body padding-top
         pad = page.evaluate("getComputedStyle(document.body).paddingTop")
         t.check(pad not in ("0px", ""), "body padding-top 已设置 (computed=%r)" % pad)
-        page.dispatch_event(".md-recent-tabs-hotspot", "mouseenter")
+        page.mouse.move(300, 2)          # 窗口最顶部边缘（≤4px）→ 滑出
+        page.wait_for_timeout(120)
         t.check(page.evaluate("document.querySelector('.md-recent-tabs').classList.contains('is-visible')"),
-                "鼠标移入热点 → 标签栏滑出(is-visible)")
+                "鼠标移到窗口最顶部 → 标签栏滑出(is-visible)")
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "core_pin_float")
@@ -705,7 +706,8 @@ def test_content_offset_fixed_pushes_canvas(browser, base):
 
 
 def test_content_offset_float_clears(browser, base):
-    """A2：float 模式标签栏默认隐藏（仅悬停热点可见），画布与各侧栏内容不应被下推（marginTop 还原）。"""
+    """A2：float 模式标签栏默认隐藏（仅鼠标移到窗口最顶部边缘才滑出），
+    画布与各侧栏内容不应被下推（marginTop 还原）。"""
     t = Tester("A2 float 模式：画布与左右面板内容还原（不下推）")
     ctx, page = new_page(browser)
     try:
@@ -908,6 +910,67 @@ def test_above_float_layout(browser, base):
     return t
 
 
+def test_float_toolbar_not_blocked(browser, base):
+    """v1.0.16 回归：浮动模式不得遮挡/拦截墨刀顶部工具栏。
+    旧实现注入一个铺满工具栏(0–48)、z-index 仅次标签栏的透明热区 div：
+    既导致鼠标移到工具栏就误弹标签栏，也直接吃掉工具栏点击（BUG 根因）。"""
+    t = Tester("浮动模式：不遮挡/拦截墨刀顶部工具栏")
+    ctx, page = new_page(browser)
+    try:
+        page.goto(base + "/proto/design/" + CID, wait_until="load")
+        inject_and_create(page, CID, HIST, active_cid="S5", display_mode="float")
+        page.wait_for_selector(".md-recent-tabs")
+        t.check(page.evaluate("document.querySelector('.md-recent-tabs').classList.contains('is-float')"),
+                "标签栏处于浮动模式")
+        t.check(page.evaluate("!document.querySelector('.md-recent-tabs-hotspot')"),
+                "不再注入覆盖工具栏的热区 div（回归点）")
+        # 等浮动模式入场动画（transform 0 → -100%，0.18s）结束，避免取到中途帧
+        page.wait_for_function(
+            "document.querySelector('.md-recent-tabs').getBoundingClientRect().bottom <= 0",
+            timeout=3000
+        )
+        # 工具栏按钮区（0–48 中部）在标签栏隐藏时必须命中工具栏本身
+        hit = page.evaluate("""() => {
+            var el = document.elementFromPoint(300, 24);
+            if (!el) return 'null';
+            return el.closest('.app-header') ? 'toolbar' : (el.className || el.tagName);
+        }""")
+        t.eq(hit, "toolbar", "工具栏中部 elementFromPoint 命中工具栏（未被遮挡）(got=%r)" % hit)
+        # 真实点击工具栏：事件必须可达（旧实现被热区截获）
+        page.evaluate("""
+            window.__tbClicks = 0;
+            document.querySelector('.app-header').addEventListener('click', function () { window.__tbClicks++; });
+        """)
+        page.mouse.click(300, 24)
+        t.eq(page.evaluate("window.__tbClicks"), 1, "浮动模式下点击工具栏按钮区：点击可达")
+        # 鼠标移到工具栏中部：标签栏不得弹出（旧 BUG：移到工具栏就弹）
+        page.mouse.move(300, 24)
+        page.wait_for_timeout(400)
+        t.check(not page.evaluate("document.querySelector('.md-recent-tabs').classList.contains('is-visible')"),
+                "鼠标悬停工具栏中部 → 标签栏不弹出")
+        # 移到窗口最顶部（≤4px）：标签栏滑出；且仍贴顶、不下推
+        page.mouse.move(300, 2)
+        page.wait_for_timeout(120)
+        t.check(page.evaluate("document.querySelector('.md-recent-tabs').classList.contains('is-visible')"),
+                "鼠标移到窗口最顶部 → 标签栏滑出")
+        t.eq(page.evaluate("document.querySelector('.md-recent-tabs').style.top"), "0px",
+             "浮动栏仍贴顶 top=0px（保持现有实现，不下推）")
+        # 移出标签栏区域（y>44）→ 自动收起，工具栏恢复独占
+        page.mouse.move(300, 60)
+        page.wait_for_timeout(400)
+        t.check(not page.evaluate("document.querySelector('.md-recent-tabs').classList.contains('is-visible')"),
+                "鼠标移出顶部标签栏区域 → 标签栏自动收起")
+        page.evaluate("window.__tbClicks = 0;")
+        page.mouse.click(300, 24)
+        t.eq(page.evaluate("window.__tbClicks"), 1, "收起后再次点击工具栏按钮区：点击可达")
+    except Exception as e:
+        t.check(False, "异常: %r" % e)
+        screenshot(page, "core_float_toolbar")
+    finally:
+        ctx.close()
+    return t
+
+
 def main():
     httpd, base = start_server()
     total_fails = 0
@@ -924,7 +987,7 @@ def main():
                    test_content_offset_fixed_pushes_canvas, test_content_offset_float_clears,
                    test_content_offset_fixed_to_float_restores, test_content_offset_relayout_survives,
                    test_above_fixed_layout, test_above_relayout_survives,
-                   test_above_float_layout]:
+                   test_above_float_layout, test_float_toolbar_not_blocked]:
                 total_fails += fn(browser, base).summary()
             # 汇总在收尾（Playwright stop / httpd shutdown）之前打印，避免收尾偶发阻塞吞掉结果
             print("\n==== 核心逻辑测试总计：%d 失败 ====" % total_fails)

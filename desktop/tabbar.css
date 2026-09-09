@@ -365,7 +365,9 @@
   background: var(--md-color-primary-soft-hover);
 }
 
-/* 浮动显示模式：默认滑出顶部隐藏，悬停顶部热区时滑入 */
+/* 浮动显示模式：默认滑出顶部隐藏，鼠标移到窗口最顶部边缘（见 recent-tabs-core.js
+   FLOAT_TRIGGER_Y，默认 4px）时滑入。触发走 mousemove 判定，不插入任何热区 DOM，
+   避免遮挡/拦截墨刀顶部工具栏点击。 */
 .md-recent-tabs.is-float {
   transform: translateY(calc(-100% - var(--md-hide-offset, 0px)));
   transition: transform 0.18s ease, box-shadow 0.18s ease;
@@ -375,15 +377,4 @@
 .md-recent-tabs.is-float.is-visible {
   transform: translateY(0);
   box-shadow: var(--md-shadow-bar);
-}
-
-/* 顶部热区：浮动模式下触发标签栏滑入 */
-.md-recent-tabs-hotspot {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 8px;
-  z-index: calc(var(--md-z-topbar) - 1);
-  background: transparent;
 }

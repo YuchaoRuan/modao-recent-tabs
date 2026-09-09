@@ -1,4 +1,8 @@
 /* =========================================================================
+ * v1.0.16 浮动模式不再注入覆盖工具栏的热区 div：该热区铺满墨刀顶部工具栏
+ *         （高=工具栏高48、z-index 仅次标签栏），既导致鼠标移到工具栏就误弹
+ *         标签栏，也直接截获工具栏点击（「工具栏点不动」根因）。改为窗口最
+ *         顶部 4px 边缘触发（document mousemove 判定），不插入任何 DOM；
  * v1.0.15 取消「工具栏上方/下方」位置切换：标签栏固定显示在墨刀工具栏上方
  *         （always above），固定/浮动图钉切换保持不变；
  * v1.0.14 切换成功后不再自动恢复原检索词（搜索框保持空态 = 全量列表）；
@@ -544,7 +548,6 @@
     // md_tabbar_position 值（含旧版存的 below）一律忽略，不再读取。
 
     var offsetStyle = null;
-    var hotspot = null;
     var lastHb = -1;
     var contentEls = [];             // 已应用下推的区域容器集合（画布视口 + 左右面板）
     var contentBaseMap = null;      // WeakMap<el, number> 下推前基准高度(px)，用于收缩高度防底部溢出
@@ -554,41 +557,61 @@
       try { localStorage.setItem(DMODE, displayMode); } catch (e) {}
     }
 
-    function ensureHotspot() {
-      var hb = detectHeaderBottom();
-      if (hotspot) {
-        hotspot.style.height = (hb > 0 ? hb : 8) + "px";
-        return;
-      }
-      hotspot = document.createElement("div");
-      hotspot.className = "md-recent-tabs-hotspot";
-      document.body.appendChild(hotspot);
-      var hideTimer = null;
-      function show() {
-        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-        bar.barEl.classList.add("is-visible");
-      }
-      function hide() {
-        if (hideTimer) clearTimeout(hideTimer);
-        hideTimer = setTimeout(function () {
-          bar.barEl.classList.remove("is-visible");
-          hideTimer = null;
-        }, 250);
-      }
-      hotspot.addEventListener("mouseenter", show);
-      hotspot.addEventListener("mouseleave", hide);
-      bar.barEl.addEventListener("mouseenter", show);
-      bar.barEl.addEventListener("mouseleave", hide);
-      hotspot.style.height = (hb > 0 ? hb : 8) + "px";
+    // 浮动模式显隐（v1.0.16）：不再注入任何 DOM，改用 document 级 mousemove 判定。
+    // 触发带 = 窗口最顶部 FLOAT_TRIGGER_Y px：鼠标停在该带内 → 滑出；
+    // 其余区域（含墨刀工具栏按钮区 clientY≈10~38）→ 收起，工具栏不被误弹、不被拦截。
+    var FLOAT_TRIGGER_Y = 4;
+    var floatBound = false;
+    var overBar = false;
+    var hideTimer = null;
+    var floatMoveHandler = null;
+
+    function showBar() {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      bar.barEl.classList.add("is-visible");
     }
 
-    function removeHotspot() {
-      if (hotspot && hotspot.parentNode) hotspot.parentNode.removeChild(hotspot);
-      hotspot = null;
+    function hideBar() {
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = setTimeout(function () {
+        bar.barEl.classList.remove("is-visible");
+        hideTimer = null;
+      }, 250);
+    }
+
+    function onFloatMove(e) {
+      if (displayMode !== "float") return;
+      if (!e || typeof e.clientY !== "number") return;
+      if (e.clientY <= FLOAT_TRIGGER_Y) { showBar(); return; }
+      if (!overBar) hideBar();          // 停在已展开的标签栏上时不收起（保证可点标签）
+    }
+
+    function onBarEnter() { overBar = true; showBar(); }
+    function onBarLeave() { overBar = false; hideBar(); }
+
+    function bindFloatTrigger() {
+      if (floatBound) return;
+      floatMoveHandler = onFloatMove;
+      document.addEventListener("mousemove", floatMoveHandler, true);
+      bar.barEl.addEventListener("mouseenter", onBarEnter);
+      bar.barEl.addEventListener("mouseleave", onBarLeave);
+      floatBound = true;
+    }
+
+    function unbindFloatTrigger() {
+      if (floatMoveHandler) {
+        document.removeEventListener("mousemove", floatMoveHandler, true);
+        floatMoveHandler = null;
+      }
+      bar.barEl.removeEventListener("mouseenter", onBarEnter);
+      bar.barEl.removeEventListener("mouseleave", onBarLeave);
+      floatBound = false;
+      overBar = false;
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       bar.barEl.classList.remove("is-visible");
     }
 
-    // 按当前工具栏高度刷新避让样式（标签栏 top / body padding / 浮动隐藏偏移 / 热点高度）。
+    // 按当前工具栏高度刷新避让样式（标签栏 top / body padding / 浮动隐藏偏移）。
     // 与 displayMode 解耦：工具栏高度变化（SPA 重渲染）时只调本函数，不打断浮动显隐状态。
     function updateOffset(ti) {
       var isFloat = displayMode === "float";
@@ -609,7 +632,6 @@
       // 顶部总占用：浮动模式仅工具栏(hb)；固定模式 bar(44)+工具栏自然高(48)=92
       var reserved = isFloat ? ti.hb : (TOPBAR_H + ti.naturalBottom);
       offsetStyle.textContent = "body{padding-top:" + reserved + "px !important;}";
-      if (hotspot) hotspot.style.height = (ti.hb > 0 ? ti.hb : 8) + "px";
       applyContentOffset(ti); // A2：同步画布/侧栏区域容器下推避让
     }
 
@@ -630,9 +652,9 @@
       bar.setPinned(!isFloat);
       updateOffset(ti);
       if (isFloat) {
-        ensureHotspot();
+        bindFloatTrigger();
       } else {
-        removeHotspot();
+        unbindFloatTrigger();
       }
     }
 
@@ -676,7 +698,6 @@
       var naturalBottom = bestBottom - (isNaN(mt) ? 0 : mt);
       return { el: best, hb: bestBottom, naturalBottom: naturalBottom };
     }
-    function detectHeaderBottom() { return getToolbarInfo().hb; }
 
     // A2（增强避让收尾，v1.0.6 扩展至左右面板）：把画布视口与各侧栏面板整体下推 TAB_H，
     // 使其始于标签栏之下。真实墨刀整体布局为「绝对定位 app 外壳 example-app(top:0) 内嵌：
@@ -855,7 +876,7 @@
         if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
         if (clickHandler) document.removeEventListener("click", clickHandler, true);
         if (bar && typeof bar.destroy === "function") bar.destroy();
-        removeHotspot();
+        unbindFloatTrigger();
         try { if (root.parentNode) root.parentNode.removeChild(root); } catch (e) {}
         if (offsetStyle && offsetStyle.parentNode) offsetStyle.parentNode.removeChild(offsetStyle);
         offsetStyle = null;

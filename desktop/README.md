@@ -16,21 +16,40 @@ document.head.appendChild(<script>);   // 脚本在主世界执行
 ```
 
 ## 当前已落盘
-- `resources/app.asar` —— v3 补丁版（已替换）
-- `resources/app.asar.orig` —— 原始干净备份（1.37MB）
-- 交付目录 `desktop/app.asar.patched` —— 已同步为 v3
+- `resources/app.asar` —— v3 补丁版（已替换；**含 v1.0.16 浮动模式修复**，2026-09-08 重打）
+- `resources/app.asar.bak` —— 原始干净备份（1.37MB），重打时**必须**以它为基底
+  （`app.asar` 已注入过 preload，再拿它当基底会二次注入 → 双标签栏）
+- 交付目录 `desktop/app.asar.patched` —— 已同步为 v3 + v1.0.16
 
 ## 验证
 完全退出客户端（含托盘）→ 重新打开 → 窗口顶部出现「最近画布」标签栏。
 
 ## 从源码重打（客户端升级后）
+
+> **基底必须是 `app.asar.bak`（原始干净包）**，不能用已打过补丁的 `app.asar`
+> —— 后者的 `resource/preload.js` 末尾已有注入代码，再追加一次会双份注入（双标签栏）。
+
 ```bash
-npx @electron/asar extract app.asar app_unpacked
+# 离线 asar CLI（无需 npx 联网），版本 @electron/asar 4.3.0 + Node 22.22.2
+NODE="C:/Users/15020/.workbuddy/binaries/node/versions/22.22.2-2/node.exe"
+ASAR="C:/Users/15020/.workbuddy/binaries/node/workspace/node_modules/@electron/asar/bin/asar.mjs"
+RES="$LOCALAPPDATA/modao-studio-enterprise/app-1.6.4/resources"
+
+"$NODE" "$ASAR" extract "$RES/app.asar.bak" app_unpacked
 cp desktop/tabbar.css desktop/tabbar.js desktop/recent-tabs-core.js desktop/recent-tabs-bootstrap.js app_unpacked/resource/
 printf '\n' >> app_unpacked/resource/preload.js
 cat desktop/preload-inject.js >> app_unpacked/resource/preload.js
-npx @electron/asar pack app_unpacked app.asar.patched
+"$NODE" "$ASAR" pack app_unpacked desktop/app.asar.patched
 ```
+
+打包后自检（缺一即说明打错基底或文件没覆盖到）：
+
+```bash
+grep -c "FLOAT_TRIGGER_Y"      desktop/app.asar.patched   # >0：含 v1.0.16 浮动修复
+grep -c "md-recent-tabs-hotspot" desktop/app.asar.patched # 必须为 0：热区已删除
+```
+
+覆盖安装目录：`desktop/apply-patch.cmd`（会先备份 `.bak`、并检测客户端进程）。
 
 ## 可选：配置内网最近接口路径
 ```js
