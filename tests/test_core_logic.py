@@ -281,10 +281,12 @@ def test_spa_switch(browser, base):
         page.wait_for_timeout(60)  # 让 MutationObserver 先消化换栏，避免与后续轮询竞态
         # 模拟 SPA 导航：墨刀会 pushState 并同步重渲染左侧栏 + 画布标题 + 加载 OTHERCID 历史
         page.evaluate("history.pushState({}, '', '/proto/design/OTHERCID')")
-        # 真实扩展无路由事件监听，靠 2s 轮询 refreshCid 检测 cid 变化并重渲染；此处等待其生效
+        # 真实扩展无路由事件监听，靠 2s 轮询 refreshCid 检测 cid 变化并重渲染；此处等待其生效。
+        # v1.0.17 行为变更：进入文件会带出「当前画板」并置顶 —— canvas-title=OTHER首页
+        # 在画布面板内**唯一**命中 O1，故 O1 变成最新项（排在 O2 之前），历史项 O2 仍保留。
         try:
             page.wait_for_function(
-                "Array.from(document.querySelectorAll('.md-tab')).map(function(e){return e.getAttribute('data-id');}).join(',') === 'O2,O1'",
+                "Array.from(document.querySelectorAll('.md-tab')).map(function(e){return e.getAttribute('data-id');}).join(',') === 'O1,O2'",
                 timeout=4500,
             )
         except Exception:
@@ -297,8 +299,9 @@ def test_spa_switch(browser, base):
         t.eq(sorted(ids), ["O1", "O2"], "OTHERCID 仅显示自身画布 (ids=%r)" % ids)
         active = page.eval_on_selector(".md-tab.is-active", "e => e.getAttribute('data-id')") \
             if page.query_selector(".md-tab.is-active") else None
-        # renderList 重建时取历史最新项(list[0])为激活：OTHERCID 历史 [O2,O1] → O2 最新
-        t.eq(active, "O2", "OTHERCID 重建后激活其最近画布（历史最新项 O2）")
+        # v1.0.17：激活项 = 「当前实际画布」(canvas-title 唯一命中的 O1) 被带出并置顶；
+        # 旧行为（激活历史最新项 O2）与真实"当前画布"不一致，已按需求修正。
+        t.eq(active, "O1", "OTHERCID 重建后激活当前画布（标题唯一命中的 O1）并保留历史项")
     except Exception as e:
         t.check(False, "异常: %r" % e)
         screenshot(page, "core_spa_switch")

@@ -1,4 +1,20 @@
 /* =========================================================================
+ * v1.0.17 画布识别收窄：墨刀 v22.18 起左栏为「页面 / 画布 / 图层」三面板，
+ *         三者**共用**通用树组件类名 div.rn-list-item / li.rn-content-item
+ *         （且 layer-item 在画布与图层面板都会出现，带 data-cid 的页面项
+ *         div.rn-list-item.page 同样存在），旧版仅按 `[data-cid]` 匹配会把
+ *         点「页面」「图层」也当成画布 → 顶部「最近画布」凭空长出无效标签。
+ *         改为**按容器锚点判定**（isCanvasPanelItem）。判据最终定为「**只做排除**」：
+ *         建标签条件 = 命中通用树项 **且不在**「页面 / 图层 / 状态页 / 交互树」容器内。
+ *         不再要求「必须命中画布面板白名单」——白名单把"画布项长什么样"硬编码成容器
+ *         id，一旦墨刀改版/挂载时机不同，真正的画布点击会被一起拒掉（真机实测：
+ *         「点画布不长标签」），比原 BUG 更严重；黑名单失效最坏只退回 1.0.16 的宽松
+ *         行为（点页面/图层也建标签），且能被真机自检脚本立刻发现。
+ *         影响面：getScreenMap / findCanvasEl / getActiveScreen / 点击建标签入口。
+ *         性能：左侧「页面」面板常驻 4400+ 节点，逐项 closest 代价高，改为
+ *         「先取黑名单容器再 contains 判归属」，并去掉了会产生重复回调的嵌套扫描。
+ *         另修：进入文件带出当前画板（种子窗口 15s + 只用唯一名称反查）、
+ *         时间戳严格递增（同毫秒 touch 不再让"最近"排序退化）。
  * v1.0.16 浮动模式不再注入覆盖工具栏的热区 div：该热区铺满墨刀顶部工具栏
  *         （高=工具栏高48、z-index 仅次标签栏），既导致鼠标移到工具栏就误弹
  *         标签栏，也直接截获工具栏点击（「工具栏点不动」根因）。改为窗口最
@@ -31,6 +47,9 @@
     var CLO  = "md_closed_screens";
     var DMODE = "md_display_mode";
     var TOPBAR_H = 44;
+    // 版本号会写到 #md-recent-tabs-root[data-md-version]，便于真机在 Console 直接
+    // 核对当前加载的是哪一版（排查「改了没生效」类问题时先看这个）。
+    var MD_VERSION = "1.0.17";
 
     // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
     // 同时存在 div.rn-list-item[data-cid] 与 li.rn-content-item[data-cid] 两种形态，
@@ -39,6 +58,147 @@
     var CANVAS_ITEM_SELECTOR = CANVAS_BASE_SELECTORS
       .map(function (s) { return s + "[data-cid]"; })
       .join(", ");
+
+    // ---- 面板锚点（v1.0.17）：「画布 / 页面 / 图层」三个左栏列表 ------------------
+    // 真机取证 + 用户界面核对（2026-09-14，墨刀 v22.18.18-op22603.1）：
+    //   左栏**上部**那列，界面标题写着「画布」，容器 = #screen-scroll-list
+    //     （内部把这种实体叫 screen / 类名带 page，但**界面文案就是「画布」**）；
+    //     条目名不带序号，如「登机牌解析流程」；.canvas-title 与它同名；
+    //     localStorage 的 screen-history-onLeave-project-<cid> 记的也是它的 id。
+    //      → 这一列**才是**「最近画布」要跟踪的对象。
+    //   左栏**下部**面板的「页面」标签，容器 = #mb-enabled-canvas-list
+    //     （内部实体类型是 Canvas，条目名带序号，如「1 登机牌解析流程」）；
+    //   左栏下部面板的「图层」标签，容器 = #layer-scroll-list / #mb-enabled-layer-list。
+    //      → 这两列都**不得**建标签。
+    // 三个列表共用同一套通用树组件类名（li.rn-content-item / div.rn-list-item，
+    // layer-item 在两列里都会出现），无法用 class 区分，只能按容器祖先判定。
+    // 白名单（诊断用）：命中任一祖先 → 该项属于「画布」列。
+    var CANVAS_PANEL_SELECTORS = [
+      "#screen-scroll-list",
+      "#screen_list",
+      ".screen-list-container",
+      "#mobile-screen-tree"
+    ];
+    // 黑名单：命中任一祖先 → **一定不是**画布项。
+    // 覆盖下部「页面」列（#mb-enabled-canvas-list 等）、「图层」列、状态页与交互树。
+    // 注意：**不能**把页面树自身的容器（#mobile-page-item / ul.child-screens 等）放进
+    // 黑名单 —— 上部「画布」列的条目正是它们的子节点。
+    var NON_CANVAS_PANEL_SELECTORS = [
+      // —— 下部「页面」列（画板列表，条目名带序号）——
+      "#mb-enabled-canvas-list",
+      "#canvas-scroll-list",
+      ".canvas-scroll-list",
+      ".canvas-sortable-list",
+      // —— 下部「图层」列（widget 树）——
+      "#mb-enabled-layer-list",
+      "#layer-scroll-list",
+      ".layer-scroll-list",
+      ".layer-sortable-list",
+      ".mb-layer-panel",
+      // —— 状态页 / 交互树 ——
+      "#mb-state-list",
+      "#interaction-tree-container",
+      "#interaction-tree-list"
+    ];
+    // 严格模式判定锚点：任一左栏列表存在 → 判定为墨刀设计页（旧版/简化 DOM 时走兼容降级）
+    var STRICT_PANEL_SELECTORS = [
+      "#screen-scroll-list",
+      "#mb-enabled-canvas-list",
+      "#canvas-scroll-list",
+      ".canvas-scroll-list",
+      "#mb-enabled-layer-list",
+      "#layer-scroll-list",
+      ".layer-scroll-list"
+    ];
+
+    // 元素（或其任一祖先）是否命中给定锚点选择器集合。
+    function matchAncestor(el, selectors) {
+      if (!el || typeof el.closest !== "function") return false;
+      for (var i = 0; i < selectors.length; i++) {
+        try { if (el.closest(selectors[i])) return true; } catch (e) {}
+      }
+      return false;
+    }
+
+    // 是否检测到新版「三面板」左栏。nav 在画布/图层间互斥切换会让面板容器
+    // 随时增删，故**每次实时计算**，不缓存为一次性常量。
+    function hasPanelLayout() {
+      for (var i = 0; i < STRICT_PANEL_SELECTORS.length; i++) {
+        try { if (document.querySelector(STRICT_PANEL_SELECTORS[i])) return true; } catch (e) {}
+      }
+      return false;
+    }
+
+    // 画布项判定：**只做排除**（黑名单），不再要求「必须命中画布面板白名单」。
+    // 教训（2026-09-11 真机回归）：白名单把「画布项长什么样」硬编码成了容器 id，
+    // 只要墨刀的画布面板容器与取证版本不完全一致（改版 / 另一套布局 / 挂载时机），
+    // 真正的画布点击会被一起拒绝 —— 用户实测「点画布不长标签」，退化比原 BUG 更严重。
+    // 而 1.0.16 之所以可用，正是因为它只做「点谁都能建标签」。故本版取两者之长：
+    //   建标签条件 = 命中通用树项 **且不在** 页面 / 图层 / 状态页 / 交互树内。
+    // 不对称风险取舍：白名单失效=画布点击被拒（用户不可用）；黑名单失效=退回 1.0.16
+    // 的宽松行为（点页面/图层也建标签，可由真机自检脚本立刻发现）——后者可接受。
+    // strict 参数保留仅为兼容既有调用点，判定不再依赖它。
+    function isCanvasPanelItem(el, strict) {
+      if (!el) return false;
+      return !matchAncestor(el, NON_CANVAS_PANEL_SELECTORS);
+    }
+
+    // 收集当前文档里真实存在的面板容器（nav 在画布/图层间互斥切换会让容器增删，
+    // 故每次实时计算，不缓存为一次性常量）。
+    function collectPanels(selectors) {
+      var out = [];
+      for (var i = 0; i < selectors.length; i++) {
+        try {
+          var els = document.querySelectorAll(selectors[i]);
+          for (var j = 0; j < els.length; j++) {
+            if (out.indexOf(els[j]) < 0) out.push(els[j]);
+          }
+        } catch (e) {}
+      }
+      return out;
+    }
+
+    // 当前面板快照：canvas=画布面板容器，non=非画布面板容器（页面/图层/状态/交互树）
+    function currentPanels() {
+      return {
+        canvas: collectPanels(CANVAS_PANEL_SELECTORS),
+        non: collectPanels(NON_CANVAS_PANEL_SELECTORS)
+      };
+    }
+
+    // el（或其祖先）是否落在给定容器集合内
+    function insideAny(el, containers) {
+      if (!el) return false;
+      for (var i = 0; i < containers.length; i++) {
+        if (containers[i] === el || containers[i].contains(el)) return true;
+      }
+      return false;
+    }
+
+    // 遍历「非页面 / 非图层」面板里的画布项（已跳过 folder）。
+    // 与 isCanvasPanelItem 同一判据（只排除黑名单容器），保证批量扫描与点击判定一致。
+    // 性能：真机「页面」面板常驻 4400+ 节点，逐项做 closest 祖先匹配代价高，这里改成
+    // 「先取出黑名单容器，再用 contains 判归属」（含 4400 项的页面面板只需第 1 次
+    // contains 即命中排除），且只做一次 querySelectorAll 取项，不产生重复回调。
+    function eachCanvasItem(fn, panels) {
+      var p = panels || currentPanels();
+      var els = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.classList && el.classList.contains("folder")) continue;
+        if (insideAny(el, p.non)) continue;   // 页面 / 图层 / 状态页 / 交互树 → 排除
+        fn(el);
+      }
+    }
+
+    // 第一个可作滚动作业的树项（跳过文件夹与非画布面板）。用于定位滚动宿主；
+    // 取不到画布项时退回任意树项，保证「滚动扫描兜底」仍尽力而为
+    // （滚动本身不会建标签，findCanvasEl 仍按面板判定，不会误点到图层/页面项）。
+    function firstCanvasItem(panels) {
+      var found = null;
+      eachCanvasItem(function (el) { if (!found) found = el; }, panels);
+      return found || document.querySelector(CANVAS_ITEM_SELECTOR);
+    }
 
     var cid = null;
     var lastCid = null;
@@ -85,15 +245,15 @@
     }
 
     // 左侧画布栏：id -> name（排除文件夹 folder）
+    // v1.0.17：只收「画布」面板的项（页面 / 图层 / 状态 / 交互树一律排除），
+    // 否则点页面、点图层都会在顶部标签栏凭空生成无效标签。
     function getScreenMap() {
       var map = {};
-      var els = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
-      for (var i = 0; i < els.length; i++) {
-        if (els[i].classList && els[i].classList.contains("folder")) continue;
-        var id = els[i].getAttribute("data-cid");
-        var name = readName(els[i]);
+      eachCanvasItem(function (el) {
+        var id = el.getAttribute("data-cid");
+        var name = readName(el);
         if (id && name && !(id in map)) map[id] = name;
-      }
+      });
       return map;
     }
 
@@ -110,7 +270,13 @@
         if (el) name = readName(el);
       }
       if (!name) return false;
-      seen[id] = { id: id, name: name, ts: Date.now() };
+      // 时间戳必须**严格大于**当前所有标签：Date.now() 只有毫秒精度，
+      // 同一毫秒内连续两次 touch（或 touch 与 syncFromHistory 的 base 撞车）会让
+      // ts 相同 → tabbar 排序退化为插入顺序，「刚点/刚带出的那个」不一定排到最前
+      // （真机/探针 2026-09-11 实测：O1 带出后仍排在 O2 之后）。
+      var ts = Date.now(), k;
+      for (k in seen) { if (seen[k] && seen[k].ts >= ts) ts = seen[k].ts + 1; }
+      seen[id] = { id: id, name: name, ts: ts };
       setStale(id, false);
       return true;
     }
@@ -118,19 +284,25 @@
     // 定位左侧画布项 DOM：遍历所有已知形态，找不到返回 null。
     // 注意：找不到 **不等于** 画布被删除 —— 左侧栏可能是虚拟滚动（未进入视口不渲染）、
     // 文件夹折叠，或正处于 SPA 重绘瞬间。调用方必须按「暂时不可见」处理（见 onSwitch）。
+    // v1.0.17：同名形态在「页面 / 画布 / 图层」面板里可能同时存在，必须按面板锚点
+    // 过滤，否则点标签会点到页面或图层里的同名节点（切错 / 建无效标签）。
     function findCanvasEl(id) {
       if (!id) return null;
       var esc = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(id) : id;
+      var p = currentPanels();
       for (var i = 0; i < CANVAS_BASE_SELECTORS.length; i++) {
-        var el = document.querySelector(CANVAS_BASE_SELECTORS[i] + '[data-cid="' + esc + '"]');
-        if (el) return el;
+        var els = document.querySelectorAll(CANVAS_BASE_SELECTORS[i] + '[data-cid="' + esc + '"]');
+        for (var j = 0; j < els.length; j++) {
+          // 与 isCanvasPanelItem 同判据：只排除页面 / 图层 / 状态页 / 交互树内的同名项
+          if (!insideAny(els[j], p.non)) return els[j];
+        }
       }
       return null;
     }
 
     // 找到左侧画布栏的可滚动容器（虚拟化长列表的滚动宿主），用于把目标画布滚入渲染窗口。
     function getCanvasScrollContainer() {
-      var el = document.querySelector(CANVAS_ITEM_SELECTOR);
+      var el = firstCanvasItem(currentPanels());
       while (el && el !== document.body && el !== document.documentElement) {
         var oy = getComputedStyle(el).overflowY;
         if ((oy === "auto" || oy === "scroll") && el.scrollHeight - el.clientHeight > 8) return el;
@@ -373,6 +545,7 @@
     // 从 screen-history 同步（初始 + 打开/离开文件时兜底）。返回是否有新画布出现。
     function syncFromHistory() {
       var ids = getRecentIds();
+      if (!ids.length) return false;   // 无历史 → 直接返回，省掉一次全表扫描
       var map = getScreenMap();
       var changed = false;
       var base = Date.now();
@@ -387,6 +560,18 @@
       return changed;
     }
 
+    // 画板项名字在真机带序号前缀（如「1 行李RFID标签编码规则」），而 .canvas-title
+    // 是无序号的名字（如「行李RFID标签编码规则」）——直接字符串相等必然失配，这正是
+    // 「打开设计文件不带出当前画板」的原因之一（真机 2026-09-14 实证）。
+    // 比对前统一去掉开头的「序号 + 分隔符」与首尾空白。
+    function normalizeName(s) {
+      return String(s == null ? "" : s)
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/^\d+\s*[.、:：\-\)]*\s*/, "")
+        .trim();
+    }
+
     // 检测当前激活画布（编辑器里正打开的那个）。优先激活态 class，其次 canvas-title 文本反查。
     // 激活态选择器按「状态后缀 × 画布项形态」展开（保持原状态优先级在前）：
     // 画布项存在 div.rn-list-item 与 li.rn-content-item 两种形态，只认一种会漏检。
@@ -395,7 +580,13 @@
       ".is-selected",
       ".selected",
       ".current",
-      "[aria-selected='true']"
+      "[aria-selected='true']",
+      // v1.0.17：真机实测（2026-09-11，v22.18.18-op22603.1）墨刀用的是
+      // `class="active"` / `class="select"`，**没有** is- 前缀，而旧表只有
+      // .is-active/.is-selected/.selected/.current → 激活检测在真机恒不命中，
+      // 「进入设计文件时带出当前画板」一直是失效的。补上真机实际类名。
+      ".active",
+      ".select"
     ];
     var ACTIVE_SELECTORS = (function () {
       var out = [];
@@ -407,23 +598,38 @@
       return out;
     })();
 
+    // v1.0.17：激活态与名称反查都必须限定在「画布」面板内——页面/图层面板里的
+    // 同名项同样带 .rn-list-item/.rn-content-item 与激活 class，不限定会把点页面
+    // 或点图层误判为「激活画布变化」，从而在标签栏凭空建标签。
+    // 注意：.canvas-title 名称反查（reliable:false）的同名歧义保护逻辑
+    // （seenHasNameCollision / lastActiveId 门槛）保持原样，只追加面板限定。
     function getActiveScreen() {
-      for (var i = 0; i < ACTIVE_SELECTORS.length; i++) {
-        var el = document.querySelector(ACTIVE_SELECTORS[i]);
-        if (el) {
-          var id = el.getAttribute("data-cid");
-          if (id) return { id: id, name: readName(el), reliable: true };
+      var strict = hasPanelLayout();
+      var i, j;
+      for (i = 0; i < ACTIVE_SELECTORS.length; i++) {
+        var found = document.querySelectorAll(ACTIVE_SELECTORS[i]);
+        for (j = 0; j < found.length; j++) {
+          if (!isCanvasPanelItem(found[j], strict)) continue;
+          var aid = found[j].getAttribute("data-cid");
+          // 名称可能为空（画布项文本未渲染完），交给调用方按 name 校验处理
+          if (aid) return { id: aid, name: readName(found[j]), reliable: true };
         }
       }
+      // 名称反查兜底：真机在「刚切页、激活 class 还没落到画布面板」的瞬间走这里。
+      // 仅用于「进入文件时带出一次」（见 syncActiveScreen 的 autoSeedUsed 闸门），
+      // 绝不用于后续切页，否则点页面 → 标题变化 → 反查命中新页画板 → 凭空建标签。
       var titleEl = document.querySelector(".canvas-title");
       if (titleEl) {
         var name = readName(titleEl);
-        if (name) {
+        var nTitle = normalizeName(name);
+        if (name && nTitle) {
           var els = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
-          for (var j = 0; j < els.length; j++) {
-            if (els[j].classList && els[j].classList.contains("folder")) continue;
-            if (readName(els[j]) === name) {
-              return { id: els[j].getAttribute("data-cid"), name: name, reliable: false };
+          for (var k = 0; k < els.length; k++) {
+            if (els[k].classList && els[k].classList.contains("folder")) continue;
+            if (!isCanvasPanelItem(els[k], strict)) continue;
+            // 按归一化名字比对（画板项带序号前缀，标题不带）
+            if (normalizeName(readName(els[k])) === nTitle) {
+              return { id: els[k].getAttribute("data-cid"), name: readName(els[k]), reliable: false };
             }
           }
         }
@@ -444,23 +650,55 @@
     }
 
     var lastActiveId = null;
+    // v1.0.17：自动带出「当前画板」只允许发生**一次**，且必须在「种子窗口」内
+    // （进入设计文件后 SEED_WINDOW_MS 内）或用户尚未操作列表时。
+    // 用户选定语义：进入设计文件时带出当前画板，之后切页不再自动建标签。
+    // 真机 2026-09-11 反例：点页面会切换页面 → 新页画板变激活、canvas-title 随之
+    // 变化 → 若持续自动跟踪，标签栏会长出一个（画板名的）新标签，用户侧表现就是
+    // 「点页面也产生了标签 / 把页面当成了画布」。
+    var autoSeedUsed = false;
+    var SEED_WINDOW_MS = 15000;
+    var autoSeedDeadline = Date.now() + SEED_WINDOW_MS;
 
-    // 激活画布变化时置顶进标签栏（覆盖“进入文件默认打开的画布”）
+    // 名称在「画布面板」内是否唯一（排除自身）。名称反查不可信，同名歧义时
+    // 反查命中的可能是 DOM 里排序更靠前的同名项（cid 不同）→ 会制造重标签幻影
+    // （「设备导入」BUG）。仅当名称唯一才允许用它做初始种子。
+    function isUniqueCanvasName(name, exceptId) {
+      if (!name) return false;
+      var target = normalizeName(name);
+      var dup = false, hit = 0;
+      eachCanvasItem(function (el) {
+        if (normalizeName(readName(el)) !== target) return;
+        hit++;
+        if (el.getAttribute("data-cid") !== exceptId) dup = true;
+      });
+      return !dup && hit >= 1;
+    }
+
+    // 激活画布变化时置顶进标签栏（仅用于“进入文件默认打开的画布”这一次）
     function syncActiveScreen() {
+      if (autoSeedUsed) return false;
+      if (Date.now() > autoSeedDeadline) return false;   // 种子窗口已过 → 绝不再自动建标签
       var active = getActiveScreen();
-      if (!active || !active.id) return false;
+      if (!active || !active.id) return false;      // 画布面板还没渲染 → 下轮再试
       if (active.id === lastActiveId) return false;
-      // 歧义保护：名称反查(reliable=false)结果不可信，仅在“已有用户明确点击目标
-      // (lastActiveId 已设)”且“未命中同名碰撞”时才允许据此更新；
-      // 初始化阶段(lastActiveId=null)或命中同名不同 cid 时，绝不凭名称反查去 touch，
-      // 避免制造重标签幻影（修复“设备导入”BUG）。
-      if (!active.reliable && (!lastActiveId || seenHasNameCollision(active.name, active.id))) return false;
-      lastActiveId = active.id;
-      return touch(active.id, active.name);
+      // 名称反查(reliable=false)结果不可信：命中同名不同 cid、或名称在画布面板内
+      // 不唯一时绝不据此 touch，避免制造重标签幻影（修复“设备导入”BUG）。
+      // 带出一次的种子优先来自激活 class（reliable=true），仅在画布面板内**名称唯一**
+      // 时才接受名称反查（真机打开文件时画板项可能还没拿到 active class）。
+      if (!active.reliable) {
+        if (seenHasNameCollision(active.name, active.id)) return false;
+        if (!isUniqueCanvasName(active.name, active.id)) return false;
+      }
+      autoSeedUsed = true;                           // 只带出一次，用完即关
+      var ok = touch(active.id, active.name);
+      if (ok) lastActiveId = active.id;
+      return ok;
     }
 
     var root = document.createElement("div");
     root.id = "md-recent-tabs-root";
+    root.setAttribute("data-md-version", MD_VERSION);   // 真机可用 Console 核对加载版本
     document.documentElement.appendChild(root);
 
     function closeId(id) {
@@ -786,6 +1024,9 @@
         lastCid = cid;
         seen = {};
         lastActiveId = null;
+        // 换设计文件 → 重新开一次「种子窗口」，允许带出一次当前画板
+        autoSeedUsed = false;
+        autoSeedDeadline = Date.now() + SEED_WINDOW_MS;
       }
       if (!cid) {
         // 非设计文件页：隐藏标签栏（不干扰 /workspace 等页面）
@@ -804,13 +1045,22 @@
 
     // 核心：点击左侧「画布」栏任意画布项 → 标记为最近并置顶进标签栏
     // 捕获阶段监听，不 preventDefault/stopPropagation，不影响墨刀自身交互。
-    var clickHandler = function (e) {
+    // v1.0.17：只有「画布」面板的点击才建标签。页面面板（#screen-scroll-list 等）
+    // 与图层面板（#layer-scroll-list 等）里的项 DOM 形态与画布项几乎一致
+    // （都是 .rn-list-item / .rn-content-item + data-cid），必须按容器锚点拒绝，
+    // 否则点页面、点图层都会在顶部「最近画布」生成无效标签。
+    function trackCanvasFromEvent(e) {
       var t = e.target;
       if (!t || !t.closest) return;
       if (!cid) return;
       var item = t.closest(CANVAS_ITEM_SELECTOR);
       if (!item) return;
+      // 用户已开始在左栏列表里操作（点页面 / 图层 / 画布 / 文件夹都算）→ 立即关闭
+      // 「进入文件自动带出」的种子窗口。否则「点页面切页 → canvas-title 变化」会被
+      // 种子路径当成激活画布变化，凭空长出一个画板标签（真机 2026-09-11 复现）。
+      autoSeedUsed = true;
       if (item.classList && item.classList.contains("folder")) return; // 文件夹忽略
+      if (!isCanvasPanelItem(item)) return;   // 非画布面板（页面 / 图层 / 状态 / 交互树）→ 不建标签
       var id = item.getAttribute("data-cid");
       if (!id) return;
       var name = readName(item);
@@ -818,9 +1068,22 @@
         lastActiveId = id;
         scheduleRender();
         bar.setActive(id);
+        // 浮动模式下标签栏默认隐藏：用户刚点了画布却看不到反馈，会误以为「没建标签」。
+        // 这里主动滑出一次，让点击结果立即可见（不动固定模式行为）。
+        if (displayMode === "float" && typeof showBar === "function") showBar();
       }
-    };
+    }
+
+    // v1.0.17：同时监听 mousedown 与 click。
+    // 原因（真机 2026-09-11 反馈「点画布没反应」）：墨刀切换画板发生在按下阶段，并且会
+    // 重渲染左栏；若节点在 mousedown 与 mouseup 之间被替换，浏览器不会派发 click
+    // （本项目早前也踩过同类"重排吞掉 click"的坑，见 tests/test_regression_tab_autoclose.py）。
+    // touch() 对同一 id 是幂等的（再次调用只刷新名称与时间戳），因此两个事件都处理
+    // 不会产生重复标签，只会让「按下即记录」比「点击才记录」更不容易丢。
+    var clickHandler = trackCanvasFromEvent;
+    var downHandler = trackCanvasFromEvent;
     document.addEventListener("click", clickHandler, true);
+    document.addEventListener("mousedown", downHandler, true);
 
     // 兜底：左侧面板可能异步渲染、screen-history 可能延迟更新、SPA 路由可能变化
     var pollTimer = setInterval(function () {
@@ -875,6 +1138,7 @@
         // 待执行的重渲染也要清掉：否则销毁后仍会对已脱离文档树的旧 bar 跑一次 renderList()
         if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
         if (clickHandler) document.removeEventListener("click", clickHandler, true);
+        if (downHandler) document.removeEventListener("mousedown", downHandler, true);
         if (bar && typeof bar.destroy === "function") bar.destroy();
         unbindFloatTrigger();
         try { if (root.parentNode) root.parentNode.removeChild(root); } catch (e) {}

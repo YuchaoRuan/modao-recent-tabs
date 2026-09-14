@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<!--
+  模拟墨刀企业版「设计文件页」——v1.0.17「画布列 / 页面列 / 图层列」QA 夹具。
+
+  目的：验证「只有点击『画布』那一列才创建标签页」这一收窄。原缺陷是点击
+  「页面」列的条目、或「图层」列的图层，也会在顶部「最近画布」标签栏里凭空
+  生成无效标签 —— 根因是三个列表**共用**通用树组件类名
+  （li.rn-content-item / div.rn-list-item，且 layer-item 在页面列与图层列都出现），
+  旧版只按 `[data-cid]` 匹配无法区分。
+
+  ★★ 界面语义（2026-09-14 用户真机核对，务必看清，曾在此处搞反过一次）★★
+    左栏**上部**那列，界面标题写着「画布」，容器 = #screen-scroll-list，
+      条目名**不带序号**（如「首页画布」），.canvas-title 与它同名。
+      → 本夹具里 data-qa="canvas-*"、data-qa-panel="canvas"，**点它应当建标签**。
+    左栏**下部**面板的「页面」标签，容器 = #mb-enabled-canvas-list，
+      条目名**带序号**（如「1 首页画布」）。
+      → 本夹具里 data-qa="page-*"、data-qa-panel="page"，**点它不得建标签**。
+    左栏下部面板的「图层」标签，容器 = #mb-enabled-layer-list。
+      → data-qa="layer-*"，**点它不得建标签**。
+
+  ★ 本夹具的构造原则（照抄真机取证 v22.18.18-op22603.1）★
+    1. 三个列表的项**必须共用** .rn-list-item / li.rn-content-item 且**都带
+       data-cid**，否则测不出原 BUG（按 cid 定位的逻辑才会被骗过）。
+    2. 归属只能靠容器祖先区分，故容器链严格照真机实现。
+    3. data-qa / data-qa-panel 仅为本夹具的测试定位钩子，不参与被测代码的
+       任何选择器（recent-tabs-core.js 只读 .rn-list-item / .rn-content-item /
+       data-cid / .folder / .is-active / .canvas-title 等真机属性）。
+
+  容器祖先链（真机取证）：
+    画布列（上部）： .screen-list-container > #screen-scroll-list
+              └ li.rn-content-item[data-cid] > div.rn-list-item.page[data-cid]
+                （内层 data-interactive-target-type="page"）
+    页面列（下部）： div#canvas-scroll-list.canvas-scroll-list > div.canvas-sortable-list
+              > ul#mb-enabled-canvas-list
+              └ li.rn-content-item[data-cid]
+                > div.rn-list-item.layer-item.interactive-target-hotspot[data-cid]
+                （内层 data-interactive-target-type="canvasList"）
+    图层列（下部）： div#layer-scroll-list.layer-scroll-list > div.layer-sortable-list
+              > ul#mb-enabled-layer-list
+              └ li.rn-content-item[data-cid] > div.rn-list-item.layer-item[data-cid]
+                （内层 data-interactive-target-type 为空）
+
+  列表可见性可运行时切换（__mock.setPanels），模拟左栏下部面板在「页面 / 图层」
+  之间互斥切换（真机同一时刻只渲染其中一个）。
+
+  暴露的测试 API（window.__mock）：
+    setPanels({page, canvas, layer})  列表渲染开关（page=上部画布列、canvas=下部页面列）
+    clickLog()                        [{qa, cid, panel, name}] 点击流水（冒泡阶段采集）
+    resetClicks()
+    setActive(qa)                     给指定项加 .is-active（移除其它项）
+    clearActive()
+    title() / setTitle(t)             读/写 .canvas-title
+    items()                           [{qa, cid, name, panel, folder}]
+    inDom(cid, panel)                 指定列表中是否存在该 cid
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    /* 绝对定位外壳：模拟真实墨刀 example-app（position:absolute top:0），
+       使 body{padding-top} 不会把工具栏推下去（避免「检测→加 padding→再检测」反馈环）。 */
+    .app-shell { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
+    .app-header {
+      position: relative; top: 0; left: 0; right: 0; height: 48px;
+      background: #fff; border-bottom: 1px solid #e5e7eb;
+      display: flex; align-items: center; padding: 0 16px; z-index: 100;
+    }
+    .app-header .logo { font-weight: 700; color: #2d7ff9; }
+    .rn-sidebar {
+      position: absolute; top: 48px; left: 0; width: 260px; bottom: 0;
+      background: #f7f8fa; border-right: 1px solid #e5e7eb; padding: 8px; overflow: auto;
+    }
+    .rn-nav { display: flex; gap: 6px; margin: 2px 0 8px; }
+    .rn-nav-item {
+      flex: 1 1 auto; text-align: center; font-size: 12px; padding: 4px 0;
+      border-radius: 4px; background: #eceef1; color: #646a73; cursor: default;
+    }
+    .rn-nav-item.is-on { background: #eef3ff; color: #2d7ff9; font-weight: 600; }
+    .rn-panel { margin-bottom: 6px; }
+    .rn-panel-label { font-size: 11px; color: #8f959e; padding: 2px 0 4px; }
+    /* 列表项：li 有内边距，内层 div 不满宽 —— 便于测试分别点到 li 与 div.rn-list-item */
+    li.rn-content-item {
+      display: block; list-style: none; padding: 4px 6px; margin-bottom: 3px;
+      cursor: pointer; font-size: 13px; color: #1f2329;
+    }
+    li.rn-content-item > div.rn-list-item {
+      padding: 4px 8px; border-radius: 6px; line-height: 18px; min-height: 18px;
+    }
+    li.rn-content-item:hover > div.rn-list-item { background: #eef3ff; }
+    li.rn-content-item > div.rn-list-item.is-active {
+      background: #eef3ff; color: #2d7ff9; font-weight: 600;
+    }
+    li.rn-content-item.folder > div.rn-list-item.folder { color: #646a73; font-style: italic; }
+    .rn-canvas { position: absolute; top: 48px; left: 260px; right: 220px; bottom: 0; padding: 24px; }
+    .rn-right-panel {
+      position: absolute; top: 48px; right: 0; width: 220px; bottom: 0;
+      background: #f7f8fa; border-left: 1px solid #e5e7eb; padding: 8px; overflow: auto;
+    }
+    .canvas-title { font-size: 18px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="app-header styles__StyledTopBar-sc-121m7wg-0 jBNgew" role="banner">
+      <span class="logo">墨刀 · 内网（QA 三面板夹具）</span>
+    </div>
+
+    <aside class="rn-sidebar">
+      <div class="rn-nav">
+        <div class="rn-nav-item is-on" id="nav-canvas">画布（上部列）</div>
+        <div class="rn-nav-item is-on" id="nav-page">页面</div>
+        <div class="rn-nav-item is-on" id="nav-layer">图层</div>
+      </div>
+
+      <!-- ============ 左栏上部：「画布」列（真机 UI 标题就是「画布」）============
+           真机形态：容器 #screen-scroll-list，条目 div.rn-list-item.page[data-cid]
+           （内部实体叫 screen/page，但界面文案是「画布」）。
+           条目名**不带序号**；.canvas-title 与它同名；screen-history 记的也是它。
+           ★ 这一列才是「最近画布」要跟踪的对象，点它应当建标签。 -->
+      <div class="rn-panel" id="panel-page">
+        <div class="rn-panel-label">画布</div>
+        <div class="screen-list-container">
+          <div id="screen-scroll-list">
+            <ul class="rn-tree">
+              <li class="rn-content-item" data-cid="C1" data-qa="canvas-C1" data-qa-panel="canvas">
+                <div class="rn-list-item page" data-cid="C1" data-interactive-target-type="page">首页画布</div>
+              </li>
+              <!-- C2 名称以 C1 名称为前缀：用于名称反查歧义 / 重复标签场景 -->
+              <li class="rn-content-item" data-cid="C2" data-qa="canvas-C2" data-qa-panel="canvas">
+                <div class="rn-list-item page" data-cid="C2" data-interactive-target-type="page">首页画布 副本</div>
+              </li>
+              <li class="rn-content-item" data-cid="C3" data-qa="canvas-C3" data-qa-panel="canvas">
+                <div class="rn-list-item page" data-cid="C3" data-interactive-target-type="page">订单详情</div>
+              </li>
+              <!-- 空名称画布项：不得产生空标签 -->
+              <li class="rn-content-item" data-cid="CEMPTY" data-qa="canvas-CEMPTY" data-qa-panel="canvas">
+                <div class="rn-list-item page" data-cid="CEMPTY" data-interactive-target-type="page"></div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 左栏下部面板的「页面」标签（真机 UI 文案为「页面」）============
+           真机形态：容器 #mb-enabled-canvas-list（内部实体类型是 Canvas），
+           条目名**带序号**（如「1 首页画布」）。
+           ★ 这一列不是「画布」，点它**不得**建标签。 -->
+      <div class="rn-panel" id="panel-canvas">
+        <div class="rn-panel-label">页面</div>
+        <div id="canvas-scroll-list" class="canvas-scroll-list">
+          <div class="canvas-sortable-list">
+            <ul id="mb-enabled-canvas-list" class="rn-tree">
+              <li class="rn-content-item" data-cid="P1" data-qa="page-P1" data-qa-panel="page">
+                <div class="rn-list-item layer-item interactive-target-hotspot" data-cid="P1"
+                     data-interactive-target-type="canvasList">1 首页画布</div>
+              </li>
+              <li class="rn-content-item" data-cid="P2" data-qa="page-P2" data-qa-panel="page">
+                <div class="rn-list-item layer-item interactive-target-hotspot" data-cid="P2"
+                     data-interactive-target-type="canvasList">2 首页画布 副本</div>
+              </li>
+              <li class="rn-content-item" data-cid="P3" data-qa="page-P3" data-qa-panel="page">
+                <div class="rn-list-item layer-item interactive-target-hotspot" data-cid="P3"
+                     data-interactive-target-type="canvasList">3 订单详情</div>
+              </li>
+              <!-- 文件夹：同样不得建标签 -->
+              <li class="rn-content-item folder" data-cid="PF" data-qa="page-PF" data-qa-panel="page">
+                <div class="rn-list-item layer-item folder" data-cid="PF"
+                     data-interactive-target-type="canvasList">4 页面分组</div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 图层面板 ============ -->
+      <div class="rn-panel" id="panel-layer">
+        <div class="rn-panel-label">图层</div>
+        <div id="layer-scroll-list" class="layer-scroll-list">
+          <div class="layer-sortable-list">
+            <ul id="mb-enabled-layer-list" class="rn-tree">
+              <!-- 与画布 C1 共用 data-cid：真机图层树里的画板节点正是这种形态，
+                   最容易骗过「按 cid 定位」的逻辑 -->
+              <li class="rn-content-item" data-cid="C1" data-qa="layer-C1" data-qa-panel="layer">
+                <div class="rn-list-item layer-item" data-cid="C1" data-interactive-target-type="">首页画布 / 矩形 1</div>
+              </li>
+              <!-- 与画布 C3 共用 data-cid -->
+              <li class="rn-content-item" data-cid="C3" data-qa="layer-C3" data-qa-panel="layer">
+                <div class="rn-list-item layer-item" data-cid="C3" data-interactive-target-type="">订单详情 / 文本 2</div>
+              </li>
+              <li class="rn-content-item" data-cid="L3" data-qa="layer-L3" data-qa-panel="layer">
+                <div class="rn-list-item layer-item" data-cid="L3" data-interactive-target-type="">图片 3</div>
+              </li>
+              <li class="rn-content-item" data-cid="L4" data-qa="layer-L4" data-qa-panel="layer">
+                <div class="rn-list-item layer-item" data-cid="L4" data-interactive-target-type="">按钮 4</div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- 无归属的孤立树项：判据是「只排除页面/图层」，故孤立项按通用树项接受
+           （它模拟真机里其他未知面板的树项，不该被一刀切拒绝） -->
+      <div class="rn-panel" id="panel-orphan">
+        <div class="rn-panel-label">（无归属）</div>
+        <ul class="rn-tree">
+          <li class="rn-content-item" data-cid="ORPHAN" data-qa="orphan-ORPHAN" data-qa-panel="orphan">
+            <div class="rn-list-item layer-item" data-cid="ORPHAN" data-interactive-target-type="">孤立项</div>
+          </li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="rn-canvas">
+      <!-- 初始标题不匹配任何画布名（T15 会显式 setTitle 到某个画布名来验证种子路径） -->
+      <div class="canvas-title">未命名画布</div>
+      <div>画布编辑区（模拟）</div>
+    </main>
+
+    <aside class="rn-right-panel">
+      <div class="canvas-title">属性面板</div>
+      <div>右侧检查器（模拟）</div>
+    </aside>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    // 面板归属判定：键名用**界面文案**（真机 2026-09-14 核对）
+    //   canvas = 左栏上部「画布」列（#screen-scroll-list）→ 应当建标签
+    //   page   = 左栏下部「页面」标签（#mb-enabled-canvas-list）→ 不得建标签
+    //   layer  = 左栏下部「图层」标签 → 不得建标签
+    var PANEL_ANCHORS = {
+      canvas: "#screen-scroll-list, .screen-list-container, #mobile-screen-tree",
+      page: "#mb-enabled-canvas-list, #canvas-scroll-list, .canvas-scroll-list, .canvas-sortable-list",
+      layer: "#mb-enabled-layer-list, #layer-scroll-list, .layer-scroll-list, .layer-sortable-list"
+    };
+    var PANEL_IDS = { canvas: "panel-page", page: "panel-canvas", layer: "panel-layer" };
+    var NAV_IDS = { canvas: "nav-canvas", page: "nav-page", layer: "nav-layer" };
+
+    var clicks = [];
+    var titleEl = document.querySelector(".rn-canvas .canvas-title");
+
+    function panelOf(el) {
+      if (!el || !el.closest) return "orphan";
+      for (var k in PANEL_ANCHORS) {
+        if (el.closest(PANEL_ANCHORS[k])) return k;
+      }
+      return "orphan";
+    }
+
+    function readName(el) {
+      return (el.textContent || "").replace(/\s+/g, " ").trim();
+    }
+
+    // 点击任一树项：记录点击流水 + 置激活态（模拟墨刀通用树组件行为）。
+    // 关键：页面列 / 图层列的项也会拿到 .is-active —— 这正是原 BUG 的第二条触发路径
+    // （getActiveScreen 按激活态建标签），夹具必须如实模拟。
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var li = t.closest("li.rn-content-item[data-cid]");
+      if (!li) return;
+      var panel = panelOf(li);
+      var qa = li.getAttribute("data-qa") || li.getAttribute("data-cid");
+      clicks.push({
+        qa: qa,
+        cid: li.getAttribute("data-cid"),
+        panel: panel,
+        name: readName(li),
+        target: (t === li) ? "li" : "inner"
+      });
+      clearActive();
+      var inner = li.querySelector("div.rn-list-item");
+      if (inner) inner.classList.add("is-active");
+      // 只有上部「画布」列的项切换「当前画布标题」（模拟墨刀：选图层/页面不会换当前画布）
+      if (panel === "canvas") {
+        var n = readName(li);
+        if (n) titleEl.textContent = n;
+      }
+    }, false);
+
+    function clearActive() {
+      var all = document.querySelectorAll(".rn-list-item.is-active, .rn-content-item.is-active");
+      for (var i = 0; i < all.length; i++) all[i].classList.remove("is-active");
+    }
+
+    function byQa(qa) {
+      return document.querySelector('[data-qa="' + qa + '"]');
+    }
+
+    window.__mock = {
+      /** 列表渲染开关：模拟左栏下部面板在「页面 / 图层」间互斥切换（真机行为）。
+       *  键名 = 界面文案：canvas 上部「画布」列；page 下部「页面」列；layer 下部「图层」列。 */
+      setPanels: function (opts) {
+        ["canvas", "page", "layer"].forEach(function (k) {
+          var box = document.getElementById(PANEL_IDS[k]);
+          var nav = document.getElementById(NAV_IDS[k]);
+          if (!box) return;
+          var want = opts && opts[k];
+          if (want === false) {
+            if (box.parentNode) box.parentNode.removeChild(box);
+            if (nav) nav.classList.remove("is-on");
+          } else {
+            if (!box.parentNode) {
+              // 插回原位：画布列 → 最前；页面/图层列 → orphan 面板之前
+              var anchor = (k === "canvas")
+                ? document.querySelector(".rn-panel")
+                : document.getElementById("panel-orphan");
+              document.querySelector(".rn-sidebar").insertBefore(box, anchor);
+            }
+            if (nav) nav.classList.add("is-on");
+          }
+        });
+      },
+      panels: function () {
+        return {
+          page: !!document.getElementById(PANEL_IDS.page),
+          canvas: !!document.getElementById(PANEL_IDS.canvas),
+          layer: !!document.getElementById(PANEL_IDS.layer)
+        };
+      },
+      clickLog: function () { return clicks.slice(); },
+      resetClicks: function () { clicks.length = 0; },
+      setActive: function (qa) {
+        clearActive();
+        var li = byQa(qa);
+        if (!li) return false;
+        var inner = li.querySelector("div.rn-list-item");
+        (inner || li).classList.add("is-active");
+        return true;
+      },
+      clearActive: clearActive,
+      title: function () { return titleEl.textContent; },
+      setTitle: function (t) { titleEl.textContent = t; },
+      items: function () {
+        var out = [];
+        var all = document.querySelectorAll("li.rn-content-item[data-cid]");
+        for (var i = 0; i < all.length; i++) {
+          out.push({
+            qa: all[i].getAttribute("data-qa"),
+            cid: all[i].getAttribute("data-cid"),
+            name: readName(all[i]),
+            panel: panelOf(all[i]),
+            folder: all[i].classList.contains("folder")
+          });
+        }
+        return out;
+      },
+      inDom: function (cid, panel) {
+        var all = document.querySelectorAll('[data-cid="' + cid + '"]');
+        for (var i = 0; i < all.length; i++) {
+          if (!panel || panelOf(all[i]) === panel) return true;
+        }
+        return false;
+      },
+      /** 名称与 .canvas-title 一致的项（供名称反查场景断言） */
+      titleMatchQas: function () {
+        var n = readName(titleEl), out = [];
+        var all = document.querySelectorAll("li.rn-content-item[data-cid]");
+        for (var i = 0; i < all.length; i++) {
+          if (readName(all[i]) === n) out.push(all[i].getAttribute("data-qa"));
+        }
+        return out;
+      }
+    };
+  })();
+  </script>
+</body>
+</html>

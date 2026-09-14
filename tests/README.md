@@ -19,6 +19,9 @@ python tests/test_tabbar_ui.py
 
 # 「点标签 → 标签被自动关闭且画布未切换」BUG 回归（虚拟滚动左侧栏夹具）
 python tests/test_regression_tab_autoclose.py
+
+# v1.0.17「只有画布面板能建标签」回归（页面/画布/图层三面板夹具）
+python tests/test_canvas_panel_only.py
 ```
 
 退出码：`0` 全过，`1` 有失败。失败用例自动在 `tests/artifacts/` 留截图。
@@ -33,9 +36,12 @@ python tests/test_regression_tab_autoclose.py
 | `tests/harness.py` | 本地静态服务器（`/proto/design/<cid>` 与未知路径均返回模拟页）；`inject_and_create()` 注入真实源码并调 `MDRecentTabs.create()`（等价 content.js 入口）；`Tester` 轻量 PASS/FAIL 收集；`new_page()` 转发页面 JS 错误 |
 | `tests/fixtures/mock-modao-design.html` | 模拟墨刀设计文件页：固定顶栏、`div.rn-list-item[data-cid]` 画布栏（含 `.folder` 排除项、`.is-active` 默认画布）、`.canvas-title`。历史由脚本写 `localStorage` |
 | `tests/fixtures/mock-modao-design-virtual.html` | 模拟**左侧画布栏虚拟滚动**的墨刀设计页：40 页长列表只渲染进入视口的行 + 折叠文件夹「归档」+ 点项后整栏重渲染（模拟 SPA 重绘）。用于复现「标签自动关闭」BUG |
+| `tests/fixtures/mock-modao-design-panels.html` | 模拟墨刀 v22.18 的**「页面 / 画布 / 图层」三面板**左栏（真机 DOM 契约：三面板共用 `li.rn-content-item` / `div.rn-list-item` 且都带 `data-cid`，只能按容器锚点区分）。含与画布同 `data-cid` 的图层节点、空名称画布项、无归属孤立项，`__mock.setPanels()` 可模拟画布/图层 nav 互斥切换 |
+| `tests/test_canvas_panel_only.py` | v1.0.17「只有画布面板能建标签」回归 14 组 / 114 断言：点页面/图层不建标签、同 cid 图层节点不污染、点画布建标签、连点不重复、空名不建、`.is-active` 收窄、点标签不误点图层、严格模式双向、兼容降级、反向对照（屏蔽面板判定后原 BUG 必复现） |
 | `tests/test_core_logic.py` | 核心逻辑 10 用例 |
 | `tests/test_tabbar_ui.py` | 组件 1 用例（演示页） |
 | `tests/test_regression_tab_autoclose.py` | 标签自动关闭 BUG 回归 5 用例（虚拟滚动夹具） |
+| `tests/test_canvas_panel_only.py` | 画布面板收窄回归 14 组 / 114 断言（三面板夹具） |
 
 ## 覆盖映射（README.browser.md 自测清单 8 项 + 扩展）
 
