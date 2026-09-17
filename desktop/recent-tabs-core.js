@@ -184,7 +184,7 @@
     //   locate-robust.2 → 能力串联 + 搜索四级探测 + 黑名单拆分 + aria 展开
     //   locate-robust.3 → 追加末位兜底「按结构展开折叠分组」（expandCollapsedByStructure）
     //                     + 诊断新增 panelStructuralToggles（只统计不点击）
-    var MD_BUILD = "locate-robust.7";
+    var MD_BUILD = "locate-robust.8";
 
     // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
     // 同时存在 div.rn-list-item[data-cid] 与 li.rn-content-item[data-cid] 两种形态，
@@ -644,11 +644,52 @@
     // R1 根因修复见下方 revealCanvasEl：步长上限恒为 clientHeight 比例值，绝不放大。
     var REVEAL_MAX_STEPS = 90;
     var REVEAL_STEP_MS = 27;
+    // BUG-0021：定位失败后「把滚动位置还给用户」的复写窗口 / 复写间隔。
+    // 两者联动：RESTORE_MS 需 ≥ 一次 React 重渲染 + 一档复写，不可调得太小（否则纠正不到）。
+    var RESTORE_MS = 600;
+    var RESTORE_STEP_MS = 80;
 
     // 搜索定位（v1.0.13）：轮询预算 / 间隔，以及在飞句柄（destroy 时取消）。
     var LOCATE_TIMEOUT_MS = 2000;
     var LOCATE_STEP_MS = 90;
     var locateHandle = null;
+
+    // BUG-0021：定位失败后把左栏滚动位置**还给**用户。
+    // ⚠ 单次 `sc.scrollTop = start` 在真机上**无效**（用户实测「左栏滚了，但滚错位置」），原因两条：
+    //   ① 墨刀重渲染会**重建**左栏节点 ⇒ 扫描开始时捕获的 `sc` 可能已脱离文档，写它不产生可见效果；
+    //   ② React 重渲染会在我们写入**之后**再次复位 scrollTop（BUG-0014 的同族现象）。
+    // 故改为「多帧反复写回 + 每次重新取滚动宿主 + 用户一手动滚就立刻放弃」，
+    // 与成功路径 `keepRowVisible` 同一套纪律。
+    //   · 只监听 wheel / keydown / pointerdown / touchstart —— 程序化改 scrollTop 只派发
+    //     scroll，不派发这四类 ⇒ **不会自我解绑**（补 scroll 监听会让本修复自我打死，
+    //     这是 BUG-0014 时期实测过的坑，别再踩）。
+    //   · revealToken 变化（新一轮定位 / destroy）⇒ 立即停止，不与新流程抢滚动。
+    function restoreScrollTop(start, token) {
+      var deadline = Date.now() + RESTORE_MS;
+      var stopped = false;
+      var evs = ["wheel", "keydown", "pointerdown", "touchstart"];
+      function release() {
+        if (stopped) return;
+        stopped = true;
+        for (var i = 0; i < evs.length; i++) {
+          try { document.removeEventListener(evs[i], release, true); } catch (e) {}
+        }
+      }
+      for (var i = 0; i < evs.length; i++) {
+        try { document.addEventListener(evs[i], release, true); } catch (e) {}
+      }
+      function tick() {
+        if (stopped || token !== revealToken) { release(); return; }
+        if (Date.now() > deadline) { release(); return; }
+        var sc2 = getCanvasScrollContainer();     // 每帧重取：宿主可能被 React 重建过
+        if (sc2 && sc2.scrollTop !== start) {
+          try { sc2.scrollTop = start; } catch (e) {}
+        }
+        setTimeout(tick, RESTORE_STEP_MS);
+      }
+      tick();
+      setTimeout(release, RESTORE_MS + 300);       // 兜底解绑，避免监听泄漏
+    }
 
     function revealCanvasEl(id, callback) {
       var token = ++revealToken;
@@ -698,7 +739,7 @@
             if (token !== revealToken) { callback(null, true); return; }
             var el2 = findCanvasEl(id, true);
             if (el2) { callback(el2, false); return; }
-            try { sc.scrollTop = start; } catch (e) {}   // 未找到：还原用户原本的滚动位置
+            restoreScrollTop(start, token);   // 未找到：把滚动位置还给用户（见函数注释）
             callback(null, false);
           }, REVEAL_STEP_MS);
           return;

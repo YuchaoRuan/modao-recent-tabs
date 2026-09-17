@@ -480,7 +480,43 @@
         return true;
       },
       scrollerTop: function () { return scroller.scrollTop; },
+      // BUG-0021：模拟「墨刀 React 在我们写入 scrollTop **之后**又把它复位」。
+      // 武装后，下一次滚动发生时会把 scrollTop 归零一次（随后自动解除，只触发一次）。
+      // 用途：单次 `sc.scrollTop = start` 会被这次复位抹掉（最终停在 0 = 用户报的「滚错位置」）；
+      //       多帧反复写回的修复则能纠正回来（最终停在 start）。
+      // ⚠ 必须做成「窗口期内**每次**滚动都复位」，不能只复位一次：
+      //   只复位一次的话，那一次会被扫描阶段的滚动消耗掉，等修复代码写入 start 时复位早已用完
+      //   ⇒ 旧实现也能停在 start ⇒ 用例假绿。做成窗口期才能区分「单次写入」与「多帧复写」。
+      armScrollResetOnce: function (ms) {
+        var win = (typeof ms === "number") ? ms : 300;
+        var until = Date.now() + win;
+        var h = function () {
+          if (Date.now() > until) {
+            try { scroller.removeEventListener("scroll", h); } catch (e) {}
+            return;
+          }
+          setTimeout(function () {
+            try { scroller.scrollTop = 0; } catch (e) {}
+          }, 0);
+        };
+        try { scroller.addEventListener("scroll", h); } catch (e) {}
+        setTimeout(function () {
+          try { scroller.removeEventListener("scroll", h); } catch (e) {}
+        }, win + 100);
+      },
       scrollerMax: function () { return Math.max(0, scroller.scrollHeight - scroller.clientHeight); },
+      // BUG-0021：把某一行从 DOM 里**真正移除**（模拟画布被删除）。
+      // 用途：造「必然定位失败」但**列表仍然很长**（scrollerMax>0）——
+      //   靠折叠造失败会让列表变短、max=0，start 恒为 0 ⇒ 断言退化成 `0==0` 的空转。
+      removeRow: function (cid) {
+        var els = document.querySelectorAll('[data-cid="' + cid + '"]');
+        for (var i = 0; i < els.length; i++) {
+          var li = els[i].closest ? els[i].closest("li") : null;
+          var node = li || els[i];
+          if (node && node.parentNode) { node.parentNode.removeChild(node); }
+        }
+        return true;
+      },
       inDom: function (cid) { return !!document.querySelector('[data-cid="' + cid + '"]'); },
       isVisible: function (cid) {
         var els = document.querySelectorAll('[data-cid="' + cid + '"]');

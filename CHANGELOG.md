@@ -146,6 +146,32 @@
   ⚠ 常量联动：`SEARCH_TOTAL_MS` 调大 ⇒ 相关用例的等待窗口必须同步放宽。
 - **验证**：`test_qa_v1013_edge` Q4 组 8/8、`test_relocate_search` R3 组 11/11，两者 `EXIT=0`。
 
+**BUG-0021（「滚错位置」的回滚：已实现 + 回归通过，但**锁定用例未完成**）**
+
+> 用户要求的第 5 项。⚠ 按「没有用例的修复视为没修」，这一项**还不能算修好**。
+
+- **现象**：定位**失败**时左栏「滚了，但滚错位置」，没有回到点击前的位置。
+- **根因**：`revealCanvasEl` 只做**单次** `sc.scrollTop = start`，在真机上无效，两条原因：
+  ① 墨刀重渲染会**重建**左栏节点 ⇒ 扫描开始时捕获的 `sc` 已脱离文档，写它不产生可见效果；
+  ② React 重渲染会在我们写入**之后**再次复位 `scrollTop`。
+- **修法**：新增 `restoreScrollTop(start, token)` —— 多帧反复写回（600ms / 每 80ms 一档）、
+  **每帧重取**滚动宿主（应对节点被重建）、用户一旦 `wheel`/`keydown`/`pointerdown`/`touchstart`
+  立即停止、`revealToken` 变化立即停止。与成功路径 `keepRowVisible` 同一套纪律。
+  ⚠ **不能补 `scroll` 监听**：程序化改 `scrollTop` 也派发 `scroll`，会自我解绑（BUG-0014 实测过的坑）。
+- **回归**：`test_reveal_gap` / `test_relocate_collapsed` / `test_locate_hidden` /
+  `test_relocate_search` / `test_qa_v1013_edge` 均 `EXIT=0`。
+- **⏸ 未完成：`tests/test_locate_hidden.py::test_h9_failure_restores_scroll` 写好但尚未通过，
+  已摘出 `main()`（硬注册会把门禁染红 = 用失败用例假装锁住缺陷）。已定位的坑：**
+  1. 用「折叠 + detach」造失败 ⇒ 列表变短、`scrollerMax=0` ⇒ `start` 恒为 0，
+     断言退化成 `0 == 0` 的空转（**已假绿过一次**）。改用夹具新增的 `removeRow(cid)` 才拿到 `start=806`。
+  2. 关掉干扰（窗口 0）后 `got=51 ≠ 0`，说明多帧复写**确实有作用**，但固定 `sleep` 测不到终态
+     （等待 2000ms + 收 toast 1500ms 仍太早，toast 也没收到）⇒ 失败链耗时比预估长。
+     下一步：**把等待改成轮询** `wait_for_function`（等 `scrollerTop` 稳定 + toast 出现）再断言。
+  3. 已排除：`setResetOnSwitch` 默认 `false`，不是干扰源。
+- **夹具新增**：`armScrollResetOnce(ms)`（窗口期内每次滚动都把 `scrollTop` 归零，模拟 React 连续复位；
+  ⚠ 必须是**窗口期**而非「只复位一次」——只复位一次会被扫描阶段的滚动消耗掉，导致假绿）、
+  `removeRow(cid)`（真正删除一行，用于造「必然失败但列表仍长」）。
+
 **本轮门禁结果（2026-09-17，`MD_BUILD=locate-robust.7`）**：`python scripts/regress.py` **rc=0**
 
 | 段 | 结果 |
