@@ -44,6 +44,18 @@ python scripts/mk-core-rejected.py                                  # → _core-
 python tests/test_relocate_collapsed.py --core _core-rejected.js    # C/D 必须失败
 # BUG-0014 对抗性自证：把当轮修复前的核心备份为 _core-prev.js，E2/E3 在其上必须失败：
 python tests/test_relocate_collapsed.py --core _core-prev.js        # E2/E3 必须失败
+
+# BUG-0015 长列表「滚动不在可见区」漏扫回归（夹具 ?rows=980；A/B 对照 v1.0.16）
+python tests/test_reveal_gap.py
+python tests/test_reveal_gap.py --core _core16.js                    # 必须失败（漏扫 P71）
+
+# v1.0.18「定位加固第 2 轮」：折叠不可见 / 真机折叠形态 / 搜索框漂移 / 同类名容器
+#   （BUG-0016 循环依赖、BUG-0017 能力互相短路、BUG-0018 同类名黑名单；
+#    H1/H3/H4/H5/H6/H7 + 保护 H2）
+python tests/test_locate_hidden.py                                   # 必须全绿（7 组 67 断言，0 失败）
+#   git show 6288b2d:recent-tabs-core.js > _core_pre2.js
+python tests/test_locate_hidden.py --core _core_pre2.js              # 【回归】组必须失败（复现用户原话）
+python tests/test_locate_hidden.py --carrier desktop                 # 用 desktop/ 副本跑 parity
 ```
 
 > A/B 对照矩阵已固化在 `tests/ab_expectations.json`，由 `scripts/regress.py` 的 [3/4] 段自动执行
@@ -62,9 +74,10 @@ python tests/test_relocate_collapsed.py --core _core-prev.js        # E2/E3 必�
 | `tests/fixtures/mock-modao-design.html` | 模拟墨刀设计文件页：固定顶栏、`div.rn-list-item[data-cid]` 画布栏（含 `.folder` 排除项、`.is-active` 默认画布）、`.canvas-title`。历史由脚本写 `localStorage` |
 | `tests/fixtures/mock-modao-design-virtual.html` | 模拟**左侧画布栏虚拟滚动**的墨刀设计页：40 页长列表只渲染进入视口的行 + 折叠文件夹「归档」+ 点项后整栏重渲染（模拟 SPA 重绘）。用于复现「标签自动关闭」BUG |
 | `tests/fixtures/mock-modao-design-panels.html` | 模拟墨刀 v22.18 的**「页面 / 画布 / 图层」三面板**左栏（真机 DOM 契约：三面板共用 `li.rn-content-item` / `div.rn-list-item` 且都带 `data-cid`，只能按容器锚点区分）。含与画布同 `data-cid` 的图层节点、空名称画布项、无归属孤立项，`__mock.setPanels()` 可模拟画布/图层 nav 互斥切换 |
-| `tests/fixtures/mock-modao-design-collapsed.html` | 模拟墨刀 v22.18 三面板左栏 + **画布列可收缩折叠 / 滚动虚拟渲染 / 全量渲染 / 切换复位**：分组「历史画布」的 30 个画布行外层被 `div.canvas-sortable-list`（**v1.0.17 黑名单名容器**）包住；`__mock.setGroupOpen()` 折叠/展开、`__mock.setWrapped()` 切换是否被该容器包住、`__mock.setPanels()` 卸载整列、**`__mock.setAnchorRenamed(true)` 把「画布」列容器锚点改版换名**（`#screen-scroll-list`→`#screen-scroll-list-v2`、`.screen-list-container`→`.screen-panel`，使核心无任何已知画布锚点匹配）。v1.0.18（BUG-0014）新增 **`setFullRender(bool)`**（全量渲染：滚出可见区的行保留在 DOM，仅被 overflow 裁掉）、**`setResetOnSwitch(bool)`**（切换后重渲染左栏并把滚动容器 `scrollTop` 归零、含重建行节点）、**`setMoldeActive(bool)`**（是否由墨刀自身给激活行加 `.is-active`）、**`isRowInScroller(cid)`**（行是否落在滚动容器可视矩形内，与核心同口径）、**`activeRowCid()`**（左栏带选中类的行 cid）。用于复现并锁定 BUG-0012 / BUG-0013 的「未找到画布」与 BUG-0014 的「点标签后回到列表顶部」 |
+| `tests/fixtures/mock-modao-design-collapsed.html` | 模拟墨刀 v22.18 三面板左栏 + **画布列可收缩折叠 / 滚动虚拟渲染 / 全量渲染 / 切换复位**：分组「历史画布」的 30 个画布行外层被 `div.canvas-sortable-list`（**v1.0.17 黑名单名容器**）包住；`__mock.setGroupOpen()` 折叠/展开、`__mock.setWrapped()` 切换是否被该容器包住、`__mock.setPanels()` 卸载整列、**`__mock.setAnchorRenamed(true)` 把「画布」列容器锚点改版换名**（`#screen-scroll-list`→`#screen-scroll-list-v2`、`.screen-list-container`→`.screen-panel`，使核心无任何已知画布锚点匹配）。v1.0.18（BUG-0014）新增 **`setFullRender(bool)`**（全量渲染：滚出可见区的行保留在 DOM，仅被 overflow 裁掉）、**`setResetOnSwitch(bool)`**（切换后重渲染左栏并把滚动容器 `scrollTop` 归零、含重建行节点）、**`setMoldeActive(bool)`**（是否由墨刀自身给激活行加 `.is-active`）、**`isRowInScroller(cid)`**（行是否落在滚动容器可视矩形内，与核心同口径）、**`activeRowCid()`**（左栏带选中类的行 cid）。用于复现并锁定 BUG-0012 / BUG-0013 的「未找到画布」与 BUG-0014 的「点标签后回到列表顶部」。**定位加固第 2 轮（BUG-0016/0017/0018）再新增**：**`setCollapsedUnrendered(bool)`**（折叠时子行**根本不渲染** —— 真机常见形态）、**`setToggleMode("aria"|"data")`**（`"data"` = **真机形态**：折叠**不用** `aria-expanded` 表达，只用 `data-collapsed` + class ⇒ 任何「只认 aria 的展开启发式」都失效）、**`setSearchTopPx(v)`** / **`setSearchPlaceholder(v)`**（把「画布」搜索框下推 >300px / 换成不含 搜索·查找·检索 的文案 ⇒ 旧探测规则必然失效）、**`setSearchBoxMissing(bool)`**（搜索框探测不到）、**`searchValue()`** / **`groupRowsCount()`** / **`toggleSignals()`** / **`wrapClass()`**；`setWrapped` 支持 `"layer"`（用 `.layer-sortable-list` 代替 `.canvas-sortable-list` 包住行） |
 | `tests/test_canvas_panel_only.py` | v1.0.17「只有画布面板能建标签」回归 14 组 / 114 断言：点页面/图层不建标签、同 cid 图层节点不污染、点画布建标签、连点不重复、空名不建、`.is-active` 收窄、点标签不误点图层、严格模式双向、兼容降级、反向对照（屏蔽面板判定后原 BUG 必复现） |
 | `tests/test_relocate_collapsed.py` | 「点标签提示未找到画布」（BUG-0012/BUG-0013）+「点标签后定位到列表位置并保持 + 左栏选中态」（BUG-0014）回归 **15 组**：C0-C5（折叠不可见 / 滚动未渲染 → 定位并切换；分组行可建标签；不误点图层；画布列卸载不误点其它列）+ **D1-D4（画布列容器锚点被改版换名：行被 sortable 容器包住 / 折叠隐藏 → 仍须定位并切换；带 `layer-item` 的页面/图层列同 cid 节点绝不误点；未知面板里同 cid 的杂散行不得因优先级反转抢占真画布行）** + **E1-E5（全量渲染下目标行滚出可视区 → 点标签必须滚回；切换后重渲染+滚动归零 → 目标行仍须在可视区（锁 BUG-0014 真机现象）；左栏目标行呈选中态且可逆无残留；用户手动滚动不被抢回；全量渲染下不得点到页面/图层列同 cid 行）**。断言按【回归】/【需求】/【保护】分组，支持 `--core` 做三方 A/B |
+| `tests/test_locate_hidden.py` | **定位加固第 2 轮**（BUG-0016 / BUG-0017 / BUG-0018）回归 **7 组 / 67 断言**：**H1**（折叠 ⇒ 子行**不渲染** + 探测不到搜索框 → 必须靠「展开画布列内折叠分组」找回并切换）、**H3**（**真机折叠形态**：无 `aria-expanded` + 搜索框 placeholder 漂移 + 下推 >300px → 必须靠「结构优先」探到搜索框、用检索找回；【需求】清空检索词后目标行仍须可见）、**H4**（行被 `.layer-sortable-list` —— 图层树同名 sortable 组件 —— 包住时定位不得被容器名拒绝）、**H5**（**真机折叠形态 + 搜索框探测不到**：两条主路全空 → 必须靠**结构判据**展开折叠分组；这是旧版**必然失败**的盲区）、**H6**（只读探针 `__mdRtProbe()` 可用且**无副作用**）、**H7**（**合成的展开点击不得凭空长标签**：去掉分组行 `folder` 类名后走两条展开路径，标签栏不得多出分组标签；R11 护栏，删掉 `suppressTrack` 守卫本用例必失败）、**H2【保护】**（画布列整体卸载 → 必须给提示且绝不误点图层/页面列同 cid 节点）。A/B 对照 `6288b2d` → `regression_fail`（旧核心 27 条失败，toast 逐字复现用户原话） |
 | `scripts/dump-canvas-dom.js` | **真机取证脚本**（IIFE、只读、不污染全局）：无新版构建时可直接粘到墨刀设计页 Console，dump 当前 DOM 真相 —— 核心版本 / 各已知锚点选择器命中数 / 所有 `[data-cid]` 行的签名（tag·class·type·layerItem·visible·panel·被拒原因）与完整祖先链（≤8 层）/ 按名字模糊匹配的候选；`console.log(JSON.stringify(...))` + `copy(...)` 便于回贴。用法见 `CHANGELOG.md` v1.0.18 / `dump-canvas-dom.js` 顶部注释 |
 | `tests/test_core_logic.py` | 核心逻辑 10 用例 |
 | `tests/test_tabbar_ui.py` | 组件 1 用例（演示页） |
@@ -91,6 +104,13 @@ python tests/test_relocate_collapsed.py --core _core-prev.js        # E2/E3 必�
 | 16 | 同 cid 冲突行不得因优先级反转抢占真画布行 | `test_relocate_collapsed.py` **D4**（未知面板杂散行） |
 | 15 | 定位失败不静默删标签 + 可见提示 | `test_relocate_collapsed.py` C5、`test_canvas_panel_only.py` T11 |
 | 17 | 点标签后定位到画布在左栏的位置并保持 + 左栏选中态 | `test_relocate_collapsed.py` **E1/E2（定位并保持）、E3（选中态）、E4（手动滚动不被抢回）** |
+| 18 | 折叠分组里的画布（子行不渲染）点标签也能定位 | `test_locate_hidden.py` **H1（BUG-0016：先展开再定位）** |
+| 19 | 真机折叠形态（无 `aria-expanded`）+ 搜索框文案/位置漂移时仍能定位 | `test_locate_hidden.py` **H3（BUG-0017：搜索框四级探测 + 检索词阶梯）** |
+| 20 | 画布行被 `.layer-sortable-list`（图层树同名组件）包住时不被拒绝 | `test_locate_hidden.py` **H4（BUG-0018）** |
+| 21 | 画布列整体卸载时不得误点其它列 + 必须给提示 | `test_locate_hidden.py` **H2**、`test_relocate_collapsed.py` C5 |
+| 22 | 真机折叠形态 + 搜索框探测不到（两条主路全空）时仍能定位 | `test_locate_hidden.py` **H5（结构判据展开，R9 末位兜底）** |
+| 23 | 真机可在 Console 一行取证（不触发失败也能拿折叠态样本） | `test_locate_hidden.py` **H6（`__mdRtProbe()` 只读）** |
+| 24 | 核心为展开折叠分组而合成的点击不得凭空长标签 | `test_locate_hidden.py` **H7（去掉 `folder` 类名 + 两条展开路径）** |
 
 ## 测试中发现的行为说明（非缺陷，已据实断言）
 

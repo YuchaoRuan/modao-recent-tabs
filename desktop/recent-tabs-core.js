@@ -1,4 +1,47 @@
 /* =========================================================================
+ * v1.0.18（定位加固第 2 轮 · BUG-0016/0017/0018）修复「折叠不可见 / 滚动不可见 → 点标签
+ *         报未找到画布」在真机仍未修复（用户 2026-09-17 再次上报）：
+ *         现象：「曾经打开的画布仍在左侧顶部画布列表中，只是被收缩折叠不可见（或因滚动
+ *         不在可见区域），点击画布标签提示：未找到画布，请先在左侧画布栏展开或滚动到它，
+ *         再点击标签切换。」要求：**无论被收缩折叠、还是因滚动不在可见区域，点标签都要
+ *         定位到画布所在位置并显示画布内容**。
+ *         本轮不动「建标签」判据，只补三个**结构性**缺陷。注意前三轮修的是「容器锚点 /
+ *         黑名单误判」，本轮修的是「能力互相短路」与「循环依赖」—— 性质不同，故此前
+ *         反复修而不掉：
+ *           BUG-0016 循环依赖（折叠不可见**永远**修不好的原因）：
+ *             唯一的展开入口 ensureRowVisible 只在 activateCanvas 内被调用，即
+ *             「**已经找到行之后**」才尝试展开；而折叠闭合的分组其子行不在 DOM（或
+ *             display:none）⇒ 找不到行 ⇒ 永远走不到展开 ⇒ 报「未找到画布」。
+ *             即：要展开得先找到行，要找到行得先展开。任何 DOM 契约下都无法收敛。
+ *             修复：新增 expandCollapsedInCanvasPanel()，**不依赖目标行是否在 DOM**，
+ *             只在「画布」列容器范围内展开所有 aria-expanded="false" 的开关；并串入
+ *             locateCanvas 的失败收尾（展开后轮询等待重渲染，再判成败）。
+ *           BUG-0017 能力互相短路：locateCanvas 开头 `if(!box){fail();return;}` ——
+ *             搜索框一旦探测不到（真机 UI 漂移即会），「清空过滤 / 按名检索 / 展开折叠」
+ *             三条能力被整体跳过，只剩滚动扫描（对折叠行无效）→ 报「未找到画布」。
+ *             修复：取消短路，改为**能力串联**（无搜索框就跳过搜索两阶段，仍执行展开 +
+ *             扫描兜底）；findScreenSearchBox 改为「结构优先、文案/几何兜底」四级探测
+ *             （L1 缓存 / L2 画布列容器内的输入框 / L3 放宽词表 / L4 原严格规则）。
+ *           BUG-0018 同类名黑名单复发：`.layer-sortable-list` 与页面列的
+ *             `.canvas-sortable-list` 属**同一套 sortable 组件**，同样会被「画布」列在
+ *             分组 / 需要滚动时复用；它却在图层树黑名单里被**无条件拒绝** —— 与 BUG-0012
+ *             同源，只是换了个类名。修复：黑名单拆成 LAYER_TREE_HARD_SELECTORS（面板级
+ *             容器，无条件拒绝）与 LAYER_TREE_SHARED_SELECTORS（组件类名，仅「不在画布列
+ *             内」时拒绝）；防误点仍由「行项带 layer-item」这条**容器无关**判据兜底。
+ *         纪律：只放宽「定位」侧；**不新增任何猜测式点击启发式**（R7 立规 —— BUG-0011/
+ *         0012/0013 全部源于启发式误判）；展开只认标准 aria-expanded 且绝不越出画布列
+ *         容器；画布列锚点全无时直接放弃（无法界定安全范围，宁可不点）。
+ *         ⚠ R9（对 R7 的唯一、受限例外，务必连约束一起读）：真机实测画布列里**没有**
+ *         aria-expanded="false"（collapsedToggleCount = 0），若「搜索框四级探测」也够不着，
+ *         则前两条主路全空 ⇒ 现状**必然失败、且无任何退路**。故补末位兜底
+ *         expandCollapsedByStructure()：判据是**结构**（自身可见的行，却包着一个不可见的
+ *         `ul` 列表容器）——不是类名 / 文案 / 图标之类的猜测信号；且只在「本来就要报失败」
+ *         的分支里执行，正常流程永不触发；只在画布列锚点内寻找、只点行的内层行项、
+ *         **不点目标行本身**、同一节点只点一次。
+ *         构建指纹：新增 MD_BUILD → 写到 #md-recent-tabs-root[data-md-build]。版本号
+ *         **冻结在 1.0.18**（改动纪律第 10 条：未获用户确认不得改版本号），故用构建指纹
+ *         证明真机跑的到底是哪一份代码。
+ *         回归用例：tests/test_locate_hidden.py（H1/H3 锁定 + H2/H4 保护）。
  * v1.0.18（本轮 · BUG-0014）修复「点标签能切换画布，但左栏列表刷新了一下回到顶部」：
  *         现象（用户原话）：「点标签能切换但不定位到画布在画布列表的位置」，追问确认
  *         「刷新了一下回到了列表顶部」；期望「滚动 + 设为左栏选中态」。
@@ -134,6 +177,14 @@
     // 版本号会写到 #md-recent-tabs-root[data-md-version]，便于真机在 Console 直接
     // 核对当前加载的是哪一版（排查「改了没生效」类问题时先看这个）。
     var MD_VERSION = "1.0.18";
+    // 构建指纹（定位加固第 2 轮，2026-09-17）：**版本号冻结期间**用它区分「真机跑的是哪一份代码」。
+    // 背景：改动纪律第 10 条禁止在用户确认前改动三处版本号（VERSION / manifest / MD_VERSION），
+    // 但真机复验又必须先证明版本（否则复验结论作废）—— 于是把「本轮构建标识」与版本号解耦。
+    // 真机核对：document.querySelector('#md-recent-tabs-root').getAttribute('data-md-build')
+    //   locate-robust.2 → 能力串联 + 搜索四级探测 + 黑名单拆分 + aria 展开
+    //   locate-robust.3 → 追加末位兜底「按结构展开折叠分组」（expandCollapsedByStructure）
+    //                     + 诊断新增 panelStructuralToggles（只统计不点击）
+    var MD_BUILD = "locate-robust.3";
 
     // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
     // 同时存在 div.rn-list-item[data-cid] 与 li.rn-content-item[data-cid] 两种形态，
@@ -165,18 +216,28 @@
     ];
     // 黑名单 A（**最强**）：图层树 / 状态页 / 交互树 —— 命中即「一定不是画布」，
     // 建标签与定位**任何情况下都拒绝**（点它会点到图层节点上，属切错）。
-    var LAYER_TREE_PANEL_SELECTORS = [
-      // —— 下部「图层」列（widget 树）——
+    // ⚠ 定位加固第 2 轮（2026-09-17）：本数组拆成「面板级硬拒绝」与「共享 sortable 组件」两部分。
+    //   理由与 BUG-0012 根因同源：`.canvas-sortable-list` 这类**组件类名**会被「画布」列在
+    //   分组 / 需要滚动时复用；`.layer-sortable-list` 是同一套 sortable 组件的另一半，
+    //   同样可能被复用。把它当无条件黑名单 ⇒ 行即使在 DOM 里也永远查不到 ⇒ 报「未找到画布」。
+    //   故：**面板级容器**（一定是非画布面板）无条件拒绝；**组件类名**仅在「不在画布列内」
+    //   时才作为拒绝依据（见 rejectReason / classifyItem）。
+    var LAYER_TREE_HARD_SELECTORS = [
+      // —— 下部「图层」列（widget 树）的面板级容器 ——
       "#mb-enabled-layer-list",
       "#layer-scroll-list",
       ".layer-scroll-list",
-      ".layer-sortable-list",
       ".mb-layer-panel",
-      // —— 状态页 / 交互树 ——
+      // —— 状态页 / 交互树（绝不是画布）——
       "#mb-state-list",
       "#interaction-tree-container",
       "#interaction-tree-list"
     ];
+    // 共享 sortable 组件类名（画布列也会复用；真机取证见 CHANGELOG BUG-0012 根因段）
+    var LAYER_TREE_SHARED_SELECTORS = [".layer-sortable-list"];
+    // 原「图层树 / 状态页 / 交互树」合集（= hard + shared）：保留给诊断字段与既有调用点
+    var LAYER_TREE_PANEL_SELECTORS =
+      LAYER_TREE_HARD_SELECTORS.concat(LAYER_TREE_SHARED_SELECTORS);
     // 黑名单 B：下部「页面」列（画板列表，条目名带序号）的容器类名。
     // ⚠ v1.0.18 教训：这些类名**同时**会被「画布」列在分组 / 滚动场景复用
     // （同一套 sortable 列表组件），故它们只能作「默认拒绝」依据，不能无条件拒绝 ——
@@ -241,14 +302,22 @@
     function currentPanels() {
       return {
         canvas: collectPanels(CANVAS_PANEL_SELECTORS),
+        // layerTree = hard + shared（诊断字段沿用原口径，输出体积不变）
         layerTree: collectPanels(LAYER_TREE_PANEL_SELECTORS),
+        // 定位加固第 2 轮：拆成两类，供 rejectReason / classifyItem 区分对待
+        layerTreeHard: collectPanels(LAYER_TREE_HARD_SELECTORS),
+        layerTreeShared: collectPanels(LAYER_TREE_SHARED_SELECTORS),
         pageList: collectPanels(PAGE_LIST_PANEL_SELECTORS)
       };
     }
 
     // el（或其祖先）是否落在给定容器集合内
+    // 防御：容器集合缺失（undefined/null）时按「不在任何容器内」处理 —— 历史教训：
+    // 新增面板字段（layerTreeHard / layerTreeShared）时，若有调用点自行拼装**部分**面板
+    // 快照（只含 canvas / layerTree / pageList），漏加字段会在此抛
+    // "Cannot read properties of undefined (reading 'length')"，把整条初始化打断。
     function insideAny(el, containers) {
-      if (!el) return false;
+      if (!el || !containers) return false;
       for (var i = 0; i < containers.length; i++) {
         if (containers[i] === el || containers[i].contains(el)) return true;
       }
@@ -281,9 +350,18 @@
     //   "inLayerTree" 落在图层树 / 状态页 / 交互树容器内（v1.0.17 成果，T11/C4/C5 锁定）
     //   "layerItem"   行项带 layer-item 类名（下部「页面」列 / 「图层」列的行，不是画布）
     // 返回 "" 表示该候选可接受。诊断输出复用本函数。
+    // 定位加固第 2 轮补充「画布列优先」规则（与 classifyItem 对 `.canvas-sortable-list` 的同款处理对称）：
+    //   · 面板级容器（hard）内 → 仍无条件拒绝（那些容器绝不在画布列内）；
+    //   · 共享 sortable 组件类名（shared）→ **只在不在画布列内时**才拒绝。若行同时落在
+    //     画布列容器内，说明命中的是「被同名组件包住的真画布行」，交给 ② layer-item 兜底判断
+    //     （真机取证：真画布行不带 layer-item，图层/页面列行必带 → ② 已足够防误点）。
     function rejectReason(el, panels) {
       var p = panels || currentPanels();
-      if (insideAny(el, p.layerTree)) return "inLayerTree";
+      // ①A 面板级容器：无条件拒绝
+      if (insideAny(el, p.layerTreeHard)) return "inLayerTree";
+      // ①B 共享 sortable 组件类名：画布列内不据此拒绝（真画布行可能被它包住）
+      if (!insideAny(el, p.canvas) && insideAny(el, p.layerTreeShared)) return "inLayerTree";
+      // ② 行项带 layer-item：容器无关的独立判据（真机取证）
       if (rowHasLayerItem(el)) return "layerItem";
       return "";
     }
@@ -299,8 +377,11 @@
     function classifyItem(el, panels) {
       if (!el) return "other";
       var p = panels || currentPanels();
-      if (insideAny(el, p.layerTree)) return "layer";
       var inCanvas = insideAny(el, p.canvas);
+      // "layer" 判定与 rejectReason 保持一致：面板级容器无条件算图层；
+      // 共享 sortable 组件类名只在**不在画布列内**时才算图层（否则它是被包住的真画布行）。
+      if (insideAny(el, p.layerTreeHard)) return "layer";
+      if (!inCanvas && insideAny(el, p.layerTreeShared)) return "layer";
       if (inCanvas) return insideAny(el, p.pageList) ? "canvasWrapped" : "canvas";
       if (insideAny(el, p.pageList)) return "page";
       return "other";
@@ -653,24 +734,81 @@
       } catch (e) {}
     }
 
-    // 探测墨刀左侧「画布搜索框」（真机取证 2026-09-07）：
-    //   <input placeholder="关键字搜索…" class=""> 位于左侧栏顶部、视口 300px 内。
-    // 条件放宽到「placeholder 含 搜索/查找/检索」+ 视口顶部 300px 内 + 宽度 > 40px，
-    // 避免命中页面其它角落的小输入框；找不到返回 null（走原路径，不改旧行为）。
+    // 探测墨刀左侧「画布搜索框」（真机取证 2026-09-07；定位加固第 2 轮 2026-09-17 加固）。
+    // 历史实现只认三条硬条件：placeholder 含 搜索|查找|检索 + 宽度>40 + 视口顶部 300px 内。
+    // 任一条件与真机 UI 漂移（改文案 / 搜索框下移 / 换组件）就返回 null —— 而 locateCanvas
+    // 曾以 `if(!box){fail();return;}` **短路**，于是「清空过滤」与「按名检索」两条能力被整体
+    // 跳过，只剩滚动扫描兜底（折叠分组的行无论滚多少次都不会出现）→ 报「未找到画布」。
+    // 现按「**结构优先、文案/几何兜底**」分四级，并把命中级别记入 lastSearchBoxSource 供诊断：
+    //   L1 缓存：上次成功用过的那个框（仍在文档中且可见）—— 同一页面内最可靠
+    //   L2 结构：**画布列容器内**的文本类输入框（不依赖 placeholder，也不依赖绝对坐标）
+    //   L3 文案：placeholder 命中更宽词表（含 关键字/名称/search/filter），放宽 300px 限制
+    //   L4 兼容：原严格规则，保持最后（老夹具 / 老真机行为不变）
+    // 只放宽「找得到框」这一侧；写值/取值语义（setSearchValue）一字未改。
+    var lastSearchBox = null;
+    var lastSearchBoxSource = "none";
+    var SEARCH_PLACEHOLDER_RE = /搜索|查找|检索|关键字|名称|search|filter/i;
+    var BAD_INPUT_TYPES = [
+      "hidden", "checkbox", "radio", "file", "color", "range",
+      "button", "submit", "reset", "image", "password"
+    ];
+
+    function inputRejected(box) {
+      var t = (box.getAttribute ? (box.getAttribute("type") || "") : "").toLowerCase();
+      return !!t && BAD_INPUT_TYPES.indexOf(t) >= 0;
+    }
+    // 可用性判据：在文档中、非禁用类型、有可见尺寸。宽度阈值沿用 40px（避免命中装饰性小框）。
+    function inputUsable(box) {
+      if (!box || inputRejected(box)) return false;
+      try {
+        if (box.isConnected === false) return false;
+        var r = box.getBoundingClientRect();
+        return r.width > 40 && r.height > 0;
+      } catch (e) { return false; }
+    }
+    function rememberSearchBox(box, source) {
+      lastSearchBox = box || null;
+      lastSearchBoxSource = box ? (source || "none") : "none";
+      return box;
+    }
+
     function findScreenSearchBox() {
+      // L1 缓存：上次用过的框仍可用就直接复用（避免同一页面内反复探测得到不同结果）
+      if (lastSearchBox && inputUsable(lastSearchBox)) return lastSearchBox;
+      lastSearchBox = null;
+      // L2 结构：画布列容器内的文本类输入框（不靠 placeholder / 不靠视口坐标）
+      var p = currentPanels();
+      for (var c = 0; c < p.canvas.length; c++) {
+        var nodes = [];
+        try { nodes = p.canvas[c].querySelectorAll("input"); } catch (e) { nodes = []; }
+        for (var n = 0; n < nodes.length; n++) {
+          // 行内的输入框（重命名 / 改名）不是搜索框 → 跳过
+          if (nodes[n].closest && nodes[n].closest("li.rn-content-item")) continue;
+          if (inputUsable(nodes[n])) return rememberSearchBox(nodes[n], "anchor");
+        }
+      }
+      // L3 文案：更宽的词表 + 不再限制视口 300px
       var inputs = document.querySelectorAll("input");
       for (var i = 0; i < inputs.length; i++) {
         var box = inputs[i];
         var ph = box.getAttribute ? (box.getAttribute("placeholder") || "") : "";
-        if (!/搜索|查找|检索/.test(ph)) continue;
+        if (!SEARCH_PLACEHOLDER_RE.test(ph)) continue;
+        if (!inputUsable(box)) continue;
+        return rememberSearchBox(box, "placeholder");
+      }
+      // L4 兼容：原严格规则（placeholder 含 搜索|查找|检索 + 宽>40 + top<300）
+      for (var j = 0; j < inputs.length; j++) {
+        var b4 = inputs[j];
+        var ph4 = b4.getAttribute ? (b4.getAttribute("placeholder") || "") : "";
+        if (!/搜索|查找|检索/.test(ph4)) continue;
         try {
-          var r = box.getBoundingClientRect();
-          if (r.width <= 40) continue;     // 太窄不可能是左侧栏搜索框
-          if (r.top >= 300) continue;      // 仅认视口顶部 300px 内的搜索框
-        } catch (e) {
+          var r4 = b4.getBoundingClientRect();
+          if (r4.width <= 40) continue;     // 太窄不可能是左侧栏搜索框
+          if (r4.top >= 300) continue;      // 仅认视口顶部 300px 内的搜索框
+        } catch (e4) {
           continue;
         }
-        return box;
+        return rememberSearchBox(b4, "legacy");
       }
       return null;
     }
@@ -699,6 +837,111 @@
       return { cancel: cancel };
     }
 
+    // ---- 折叠分组展开阶段（定位加固第 2 轮，2026-09-17，BUG-0016）------------------------
+    // 旧实现「找不到目标行」时只会滚动扫描 —— 而**折叠闭合的分组，其子行无论怎样滚动都不会
+    // 被渲染**（真机折叠 = 子行不在 DOM；夹具可建模为 display:none）。更致命的是：
+    // 旧代码里唯一的展开入口 ensureRowVisible 只在 activateCanvas 内被调用，即「**已经找到
+    // 行之后**」才尝试展开 —— 而折叠恰好让行找不到 ⇒ 循环依赖：
+    //     要展开得先找到行，要找到行得先展开。
+    // 所以「被收缩折叠不可见」这一半需求，在任何 DOM 契约下都不可能被旧实现修好。
+    // 本阶段专门打破该循环：**不依赖目标行是否已在 DOM**，直接在「画布」列范围内把处于
+    // 折叠态的开关全部展开。
+    // 纪律（务必守住，违者复发 BUG-0011/0012/0013）：
+    //   · 只认标准 `aria-expanded="false"`，**不新增任何猜测式点击启发式**（R7 立规）；
+    //   · **绝不越出「画布」列容器**（越界会误点左侧 nav / 页面列 / 图层列，触发切换面板）；
+    //   · 画布列锚点一个都没有时**直接放弃**（无锚点 ⇒ 无法界定安全范围，宁可不点）；
+    //   · 同一节点本轮只点一次（DOM 上的 JS 私有 expando，不写 data-*，不污染宿主 React 读回的字段）；
+    //   · 每轮**重新扫描**开关集合 —— 展开会让墨刀重渲染，旧节点可能已脱离文档。
+    // 返回实际被点击的开关数（0 = 无可展开项，调用方不必等重渲染）。
+    var EXPAND_MAX = 10;
+    // 自产点击抑制（防「凭空长标签」，R11）：展开折叠分组时我们会**合成 click**，
+    // 而 `trackCanvasFromEvent` 是 document 捕获阶段的监听 → 它会把这次合成点击也当成
+    // 「用户点了左栏一行」；若该分组行**不带 `folder` 类名**（真机类名漂移），
+    // 就会凭空长出一个标签（历史上出现过同类问题）。
+    // 故合成点击（仅限「展开折叠分组」这类**非用户意图**的点击）期间置位本计数器，
+    // 点击监听器直接忽略。**注意不要用它包住「点目标行切换画布」** —— 那是用户意图。
+    // 用计数器而非布尔：click 派发虽同步，但多轮展开可能嵌套，需成对。
+    var suppressTrack = 0;
+    function clickSuppressed(el) {
+      if (!el || typeof el.click !== "function") return;
+      suppressTrack++;
+      try { el.click(); } catch (e) {} finally { suppressTrack--; }
+    }
+    function expandCollapsedInCanvasPanel() {
+      var p = currentPanels();
+      if (!p.canvas.length) return 0;
+      var clicked = 0;
+      for (var round = 0; round < EXPAND_MAX; round++) {
+        var next = null;
+        for (var c = 0; c < p.canvas.length && !next; c++) {
+          var nodes = [];
+          try { nodes = p.canvas[c].querySelectorAll('[aria-expanded="false"]'); } catch (e) { nodes = []; }
+          for (var i = 0; i < nodes.length; i++) {
+            if (!nodes[i].__mdRtExpanded) { next = nodes[i]; break; }
+          }
+        }
+        if (!next) break;
+        next.__mdRtExpanded = 1;
+        clickSuppressed(next);                 // 墨刀原生展开行为（点击分组行）；自产点击不计入建标签
+        clicked++;
+      }
+      return clicked;
+    }
+
+    // ---- 末位兜底展开（结构识别，**仅在前两条主路都无能为力时**才执行）------------------
+    // 为什么需要它：真机实测「画布」列里**没有** aria-expanded="false"（collapsedToggleCount = 0），
+    // 若「搜索框四级探测」也够不着（改版把搜索框挪出画布列容器、或换成非 input 组件），
+    // 则上面两条主路全部为空 → 现状是**必然失败**。该组合没有任何退路，故补这一层。
+    // 判据是**结构**而非类名/文案（不用 "folder"/"collapse"/caret 之类猜测信号）：
+    //   在「画布」列内，一个**自身有布局盒**的行（`li.rn-content-item`），却包着一个
+    //   **没有布局盒**的 `ul` 列表容器 —— 这是「折叠的分组行」唯一自洽的解释
+    //   （叶子画布行不会含列表容器）。
+    // 纪律（与 R7 的边界，务必守住）：
+    //   · 只在**前两条主路都失败**的分支里被调用（正常流程永不执行 → 不可能让已好的流程变糟）；
+    //   · 只在「画布」列锚点容器内寻找，绝不越界（越界会误点页面列 / 图层列 / 左栏 nav）；
+    //   · 只点「行 + 其内层行项」，不点任意后代；**不点目标行本身**（不替用户做切换）；
+    //   · 同一节点同一页面只点一次（DOM 上的 JS 私有 expando，不写 data-*，不污染宿主 React 字段）；
+    //   · 画布列锚点一个都没有 → 直接放弃（无锚点 ⇒ 无法界定安全范围，宁可不点）。
+    function expandCollapsedByStructure(id) {
+      var p = currentPanels();
+      if (!p.canvas.length) return 0;
+      var clicked = 0;
+      for (var round = 0; round < EXPAND_MAX; round++) {
+        var cands = structuralToggleCandidates(p, id);
+        if (!cands.length) break;
+        var next = cands[0];
+        next.__mdRtStructExpanded = 1;
+        var hit = null;
+        try { hit = next.querySelector("div.rn-list-item") || next; } catch (e) { hit = next; }
+        clickSuppressed(hit);                  // 墨刀原生展开行为（点击分组行）；自产点击不计入建标签
+        clicked++;
+      }
+      return clicked;
+    }
+
+    // 结构候选集：展开与诊断**共用同一判据**（避免两处漂移）。返回「像折叠分组行」的节点数组。
+    // 判据只有两条：行自身有布局盒；行内含至少一个无布局盒的 `ul` 列表容器。
+    function structuralToggleCandidates(p, id) {
+      var out = [];
+      if (!p || !p.canvas || !p.canvas.length) return out;
+      for (var c = 0; c < p.canvas.length; c++) {
+        var rows = [];
+        try { rows = p.canvas[c].querySelectorAll("li.rn-content-item"); } catch (e) { rows = []; }
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          if (row.__mdRtStructExpanded) continue;                       // 本轮已点过
+          if (id && row.getAttribute && row.getAttribute("data-cid") === id) continue;  // 不点目标行本身
+          if (!isRowVisible(row)) continue;                             // 行本身必须可见
+          var lists = [];
+          try { lists = row.querySelectorAll("ul"); } catch (e2) { lists = []; }
+          for (var j = 0; j < lists.length; j++) {
+            if (!isRowVisible(lists[j])) { out.push(row); break; }      // 有不可见列表容器 → 折叠分组行
+          }
+        }
+      }
+      return out;
+    }
+
     // v1.0.13 自动重定位：在 onSwitch 未命中分支、revealCanvasEl 滚动扫描**之前**
     // 调用。真机取证结论：真实墨刀设计页左侧列表**全量渲染**，真正「找不到」的根因
     // 是左侧搜索框处于过滤态（非命中画布被移出 DOM）；故优先把搜索框当作定位工具：
@@ -708,21 +951,26 @@
     //   切换成功 → 搜索框保持空态（全量列表），**不再自动恢复**原检索词
     //           （需求调整 2026-09-07：恢复原词会让列表立刻回到过滤态，
     //            刚打开的画布若不含该词随即移出视口，用户会误以为没切过去）；
-    //   全部失败 → 还原搜索现场后调 fail()（= 滚动扫描 + 不可达提示，v1.0.12 语义）。
-    // 仅当「探测到搜索框」才进入；探测不到的环境（历史夹具 / 墨刀改版）直接 fail()。
+    //   全部失败 → 还原搜索现场 → **展开画布列内折叠分组** → 仍未命中才调 fail()
+    //           （= 滚动扫描 + 不可达提示，v1.0.12 语义）。
+    // 定位加固第 2 轮（2026-09-17）：**取消「探测不到搜索框就 fail()」的短路**。
+    //   旧写法 `if(!box){fail();return;}` 会让能力互相短路 —— 搜索框一旦探测失败，
+    //   「清空过滤 / 按名检索 / 展开折叠」三条能力全部被跳过，只剩滚动扫描（对折叠行无效）。
+    //   现改为「能力串联」：搜索框不可用就跳过搜索两阶段，仍然执行展开 + 扫描兜底。
     function locateCanvas(id, name, fail) {
-      var box = findScreenSearchBox();
-      if (!box) { fail(); return; }
-      // 竞态防护：本次定位开始即令在飞扫描/轮询失效；后续每次 attempt 都校验
-      // 局部 token 仍是最新，防止「清空轮询未结束时用户又点了别的标签」旧结果覆盖。
+      // 竞态防护：本次定位开始即令在飞扫描/轮询失效（必须最先执行 —— 本函数即使走
+      // 「无搜索框」分支也会实际切换画布，同样需要让上一次的在飞请求作废）。
       var token = ++revealToken;
       if (locateHandle) { locateHandle.cancel(); locateHandle = null; }
-      var originalValue = box.value || "";
-      var hadFocus = (document.activeElement === box);
+      var box = findScreenSearchBox();
+      var originalValue = box ? (box.value || "") : "";
+      var hadFocus = !!(box && document.activeElement === box);
+      // 情形二注入的临时检索词（用于成功后复核：见 succeed）
+      var typedTerm = "";
 
       // 切换后归还焦点（若用户原本聚焦在搜索框）
       function finish() {
-        if (hadFocus && document.activeElement !== box) {
+        if (box && hadFocus && document.activeElement !== box) {
           try { box.focus(); } catch (e) {}
         }
       }
@@ -730,6 +978,7 @@
       // 非空 = 恢复原搜索词，别把用户没定位成功前的检索上下文弄丢）。
       // 切换**成功**路径不调用（见 succeed：成功后不恢复原检索词）。
       function restoreSearch() {
+        if (!box) return;
         try { setSearchValue(box, originalValue); } catch (e) {}
       }
       function succeed(el) {
@@ -740,27 +989,82 @@
         // 写回，列表立即回到过滤态，刚打开的画布（往往不含该词）又被移出 DOM，
         // 用户会误以为没切过去。故成功后搜索框统一保持/回到空态 = 全量列表；
         // 情形二注入的临时「目标名前缀」检索词也在此一并清掉，不留残留。
-        if (box.value) {
+        if (box && box.value) {
           try { setSearchValue(box, ""); } catch (e) {}
+          // 需求冲突消解（定位加固第 2 轮）：
+          //   BUG-0008 要求成功后清空检索词（左栏回到全量列表）；
+          //   BUG-0014 要求「定位到该画布在左栏列表中的位置并**保持**」。
+          //   若目标行本来就是**靠检索才现身**的（它在折叠分组里），一清空就立刻消失 →
+          //   用户看到「刚定位到又没了」。故清空后**复核**目标行是否仍找得到，找不到就把
+          //   检索词写回：宁可让左栏停在检索态（那一行看得见），也不让定位结果消失。
+          if (typedTerm && !findCanvasEl(id, true)) {
+            try { setSearchValue(box, typedTerm); } catch (e2) {}
+          }
         }
       }
+      // 搜索两阶段都失败后的收尾：先展开画布列内折叠分组，展开过就轮询等重渲染，
+      // 仍未命中才 fail()（滚动扫描 + 提示）。
       function allFailed() {
         if (token !== revealToken) return;
-        finish();
-        restoreSearch();     // 先把搜索现场还原（空原值即恢复全量列表）
-        fail();              // 滚动扫描 + 不可达提示（保持 v1.0.12 语义，不重复标 stale）
-      }
-      // 情形二：按目标名检索；名称较长时取前若干字符（子串命中即可）。
-      function searchByName() {
-        if (!name) { allFailed(); return; }
-        var q = name.length > 8 ? name.slice(0, 8) : name;
-        try { setSearchValue(box, q); } catch (e) { allFailed(); return; }
+        var n = 0;
+        try { n = expandCollapsedInCanvasPanel(); } catch (e) { n = 1; }
+        if (!n) {
+          // 前两条主路（搜索清空 / 按名检索 / aria 展开）都为空 → 末位兜底：按**结构**展开
+          // 折叠分组。真机折叠不用 aria-expanded 且搜索框够不着时，这是唯一剩下的动作；
+          // 它只在「本来就要报失败」的分支里执行，不可能让已经能用的流程变糟。
+          try { n = expandCollapsedByStructure(id); } catch (e) { n = 0; }
+        }
+        if (!n) {
+          // 确实无可展开项：没必要多等一轮（保持「画布确实不存在」时的提示时延）
+          finish();
+          restoreSearch();
+          fail();
+          return;
+        }
+        // 展开动作已发出 → 墨刀重渲染左栏需要一两帧，用轮询等行出现再判成败
         locateHandle = pollFind(id, LOCATE_TIMEOUT_MS, LOCATE_STEP_MS, function (el) {
           locateHandle = null;
           if (token !== revealToken) return;
           if (el) { succeed(el); return; }
-          allFailed();
+          finish();
+          restoreSearch();
+          fail();
         });
+      }
+      // 无搜索框可用：跳过搜索两阶段，但**仍然**执行「展开折叠分组」兜底（原来这里直接
+      // fail()，正是「折叠不可见」永远修不好的原因）。
+      if (!box) { allFailed(); return; }
+      // 情形二：按目标名检索；名称较长时取前若干字符（子串命中即可）。
+      // 定位加固第 2 轮：改为**检索词阶梯**（全名 → 前 8 → 前 4），逐个尝试、命中即停。
+      //   理由：真机画布名常带后缀（如「航班座位号查询（说明）」），把整名塞进搜索框可能
+      //   因墨刀的分词/模糊匹配策略而不命中；截断到合法前缀基本必中。阶梯有界（≤3 个词）。
+      var terms = [];
+      function termLadder() {
+        var out = [];
+        var n = String(name || "").replace(/\s+/g, " ").trim();
+        if (!n) return out;
+        [n, n.slice(0, 8), n.slice(0, 4)].forEach(function (t) {
+          t = String(t || "").trim();
+          if (t && out.indexOf(t) < 0) out.push(t);
+        });
+        return out;
+      }
+      function searchNext() {
+        if (token !== revealToken) return;
+        if (!terms.length) { allFailed(); return; }
+        typedTerm = terms.shift();
+        try { setSearchValue(box, typedTerm); } catch (e) { allFailed(); return; }
+        locateHandle = pollFind(id, LOCATE_TIMEOUT_MS, LOCATE_STEP_MS, function (el) {
+          locateHandle = null;
+          if (token !== revealToken) return;
+          if (el) { succeed(el); return; }
+          searchNext();        // 本词未命中 → 换更短的前缀再试
+        });
+      }
+      function searchByName() {
+        if (!name) { allFailed(); return; }
+        terms = termLadder();
+        searchNext();
       }
       if (originalValue) {
         // 情形一：清空过滤词 → 目标（若只是被搜索过滤）随全量列表回到 DOM
@@ -853,7 +1157,7 @@
       }
       var toggles = collectCollapsedToggles(el, p);
       for (var i = 0; i < toggles.length && i < 2; i++) {
-        try { toggles[i].click(); } catch (e) {}     // 展开折叠分组（墨刀原生行为）
+        clickSuppressed(toggles[i]);     // 展开折叠分组（墨刀原生行为）；自产点击不计入建标签
         var fresh = findCanvasEl(id, true);
         if (fresh) el = fresh;
         if (isRowVisible(el)) break;
@@ -1142,13 +1446,31 @@
         var rowFoundButHidden = !!(picked && !isRowVisible(picked));
         return {
           version: MD_VERSION,
+          build: MD_BUILD,                   // 构建指纹（版本号冻结期间用它证明「跑的是哪一份」）
           id: id,
           name: name,
-          searchBox: !!findScreenSearchBox(),
+          searchBox: !!findScreenSearchBox(),   // 必须先调用：它会写入 lastSearchBoxSource
+          searchBoxSource: lastSearchBoxSource, // none / anchor(L2 结构) / placeholder(L3 文案) / legacy(L4)
           historyIds: getRecentIds(),
           trackedIds: Object.keys(seen),
           cidHitTotal: cidEls.length,        // 全文档 [data-cid=<id>] 命中总数
           rowHitTotal: candidates.length,    // 通用树项中同 cid 的条数
+          // 画布列内「处于折叠态的开关」总数（**只统计，不点击**）—— 与 collapsedToggles
+          // （目标行祖先链上的折叠开关数）互补：后者依赖「行已在 DOM」，前者不依赖。
+          panelCollapsedToggles: (function () {
+            var n = 0;
+            for (var c = 0; c < p.canvas.length; c++) {
+              try { n += p.canvas[c].querySelectorAll('[aria-expanded="false"]').length; } catch (e) {}
+            }
+            return n;
+          })(),
+          // 画布列内「按**结构**判定的折叠分组行」总数（**只统计，不点击**）——
+          // 回答「真机折叠若不是 aria，结构判据认不认得出它」。与面板折叠开关数是**并列**关系：
+          // 两者都为 0 ⇒ 画布列内既无 aria 折叠、也无结构可辨的折叠容器 → 折叠解释不成立，
+          // 应转向看 cidHitTotal（行是否已被移出 DOM）与 searchBoxSource（搜索框怎么找到的）。
+          panelStructuralToggles: (function () {
+            try { return structuralToggleCandidates(p, id).length; } catch (e) { return 0; }
+          })(),
           anchors: {                         // 各已知锚点命中数（锚点被改版换名时此处会全 0）
             canvas: p.canvas.length,
             layerTree: p.layerTree.length,
@@ -1340,6 +1662,8 @@
     var root = document.createElement("div");
     root.id = "md-recent-tabs-root";
     root.setAttribute("data-md-version", MD_VERSION);   // 真机可用 Console 核对加载版本
+    // 构建指纹：版本号冻结期间用它区分「真机跑的是哪一份代码」（见 MD_BUILD 注释）
+    root.setAttribute("data-md-build", MD_BUILD);
     document.documentElement.appendChild(root);
 
     function closeId(id) {
@@ -1695,6 +2019,9 @@
     // （都是 .rn-list-item / .rn-content-item + data-cid），必须按容器锚点拒绝，
     // 否则点页面、点图层都会在顶部「最近画布」生成无效标签。
     function trackCanvasFromEvent(e) {
+      // R11：忽略我们**自己合成**的点击（展开折叠分组等）—— 否则若分组行不带 `folder`
+      // 类名（真机类名漂移），展开动作会凭空长出一个标签。用户真实点击不受影响。
+      if (suppressTrack > 0) return;
       var t = e.target;
       if (!t || !t.closest) return;
       if (!cid) return;
@@ -1771,6 +2098,28 @@
         return false;
       });
     }
+
+    // ---- 真机取证入口（只读：不点击、不改状态、不弹 toast）----------------------------------
+    // 目的：在**不触发失败**的情况下回答「真机画布列里的折叠到底是怎么表达的」——
+    // 这是本项目反复修不掉的首要障碍（只能靠「失败时自动打印」反推，拿不到折叠态的样本）。
+    // 真机用法（Console，单行，见 README.browser.md）：
+    //   __mdRtProbe()              → 对标签栏里每条最近画布各输出一条诊断
+    //   __mdRtProbe('<cid>')       → 只针对指定 id
+    // 输出对象与「定位失败诊断」同构（build / cidHitTotal / rowHitTotal / rejectReason /
+    // searchBoxSource / panelCollapsedToggles / panelStructuralToggles / anchors …）。
+    try {
+      global.__mdRtProbe = function (onlyId) {
+        var ids = onlyId ? [String(onlyId)] : Object.keys(seen);
+        if (!ids.length) ids = getRecentIds();
+        var out = [];
+        for (var i = 0; i < ids.length; i++) {
+          var nm = (seen[ids[i]] && seen[ids[i]].name) || "";
+          try { out.push(diagnoseLocateFailure(ids[i], nm)); } catch (e) {}
+        }
+        try { console.log("[modao-recent-tabs] 只读探针 probe:", out); } catch (e2) {}
+        return out;
+      };
+    } catch (e) {}
 
     var ctrl = {
       refresh: refreshCid,

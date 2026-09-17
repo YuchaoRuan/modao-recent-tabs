@@ -33,3 +33,5 @@ tests/_qa_old_*
 tests/_qa_bug0015_core_inst.js
 # 一次性取证脚本（下划线前缀 = 临时，不入库）
 scripts/_*.py
+# 取证 / 回归运行的输出证据（下划线前缀 = 临时；如 tests/_gate_round2.txt、tests/_locate_hidden_*.txt）
+tests/_*.txt

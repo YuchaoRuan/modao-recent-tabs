@@ -59,6 +59,25 @@
     setFullRender(bool) / isFullRender()
                                         全量渲染：开 → 分组展开时**所有行常驻 DOM**
                                         （滚出可见区的行只被 overflow 裁掉，不卸载）
+    ===== v1.0.18 定位加固第 2 轮（BUG-0016/0017/0018）新增 =====
+    setCollapsedUnrendered(bool) / isCollapsedUnrendered()
+                                        折叠时**子行不渲染**（真机折叠常把子行移出 DOM）。
+                                        开 → 点标签时目标行既不在 DOM、也不能靠滚动找回。
+    setToggleMode("aria"|"data") / isToggleMode()
+                                        折叠态的表达方式。"aria"=标准 aria-expanded（旧行为）；
+                                        "data"=**真机形态**（无 aria-expanded，只用
+                                        data-collapsed + class）→ 任何「只认 aria-expanded 的
+                                        展开启发式」都失效，只能靠搜索把行找回来。
+    setSearchTopPx(v)                   把「画布」搜索框下推 v 像素（>300 即超出旧代码
+                                        「视口顶部 300px 内」的限制）
+    setSearchPlaceholder(v)             改搜索框 placeholder 文案（可去掉 搜索/查找/检索 字样）
+    setSearchBoxMissing(bool)           让搜索框探测不到（隐藏 + type=hidden）
+    setFolderClass(bool) / hasFolderClass()
+                                        去掉/恢复分组行上的 `folder` 类名（模拟真机类名漂移）
+                                        —— 用于锁定 R11：核心为展开而**合成**的 click
+                                        不得被文档级点击监听器当成用户点击（否则凭空长标签）
+    searchValue() / groupRowsCount() / toggleSignals() / wrapClass()
+                                        检索词 / 分组内已渲染行数 / 折叠信号 / 包装容器类名
     setResetOnSwitch(bool) / isResetOnSwitch()
                                         切换复位：开 → 每次切换画布后重渲染左栏并把
                                         滚动容器 scrollTop 归零、重建行节点
@@ -99,6 +118,15 @@
        #screen-scroll-list 改掉，靠这个稳定 class 保住滚动行为（否则改名就把长列表
        变成不可滚动，测不出滚动场景）。 */
     #screen-scroll-list, .canvas-col-scroll { height: 420px; overflow-y: auto; overflow-x: hidden; }
+    /* v1.0.18 定位加固第 2 轮：模拟左侧「画布」搜索框。
+       setSearchTopPx(v) 把它下推（>300px 即超出旧代码「视口顶部 300px 内」的限制）；
+       setSearchPlaceholder(v) 可换成不含 搜索/查找/检索 的文案（模拟真机 UI 文案漂移）。
+       两条都失效时，只有「结构优先」的探测方式（画布列容器内的输入框）能找到它。 */
+    .md-fake-search { padding: 0 4px 6px; }
+    #canvas-search {
+      width: 180px; height: 26px; padding: 0 6px; font-size: 12px;
+      border: 1px solid #dcdfe6; border-radius: 4px;
+    }
     li.rn-content-item {
       display: block; list-style: none; padding: 4px 6px; margin-bottom: 3px;
       cursor: pointer; font-size: 13px; color: #1f2329;
@@ -137,6 +165,12 @@
       <div class="rn-panel" id="panel-canvas-col">
         <div class="rn-panel-label">画布</div>
         <div class="screen-list-container" id="canvas-col-container">
+          <!-- 「画布」搜索框（v1.0.18 定位加固第 2 轮新增）：真机墨刀靠它跨分组检索画布，
+               是「折叠分组里的画布」唯一不依赖折叠实现方式的找回手段。
+               setSearchBoxMissing(true) → 模拟探测不到搜索框（定位能力**不得**因此整体短路）。 -->
+          <div class="md-fake-search" id="canvas-search-wrap">
+            <input id="canvas-search" type="text" placeholder="关键字搜索…" />
+          </div>
           <div id="screen-scroll-list" class="canvas-col-scroll">
             <ul class="rn-tree" id="canvas-top-list">
               <!-- 顶层可见画布：一直渲染，用于「滚动宿主」定位与对照 -->
@@ -235,10 +269,22 @@
       open: false, active: "C0", clicks: [], wrapped: true, anchorRenamed: false,
       fullRender: false,   // v1.0.18（BUG-0014）：全量渲染 —— 滚出可见区的行保留在 DOM，仅被 overflow 裁掉
       resetOnSwitch: false, // v1.0.18（BUG-0014）：切换后重渲染左栏并把滚动容器 scrollTop 归零
-      moldeActive: true    // v1.0.18：是否由墨刀自身给激活行加 .is-active（默认开＝沿用真机行为）
+      moldeActive: true,   // v1.0.18：是否由墨刀自身给激活行加 .is-active（默认开＝沿用真机行为）
+      // ===== v1.0.18 定位加固第 2 轮新增 =====
+      // 折叠态的表达方式：真机实测 collapsedToggleCount = 0（文档里**没有** aria-expanded="false"），
+      // 说明真机折叠并非用标准 aria 属性表达 → 夹具必须能模拟「没有 aria-expanded 的折叠」：
+      //   "aria" → 分组行带 aria-expanded（旧行为，C/D/E 组用例依赖）
+      //   "data" → 分组行不带 aria-expanded，只用 data-collapsed / class 表达（**真机形态**）
+      toggleMode: "aria",
+      // 折叠时子行是否**不渲染**（真机折叠常把子行移出 DOM）—— 此时连「行在 DOM 里被隐藏」都不成立
+      collapsedUnrendered: false,
+      query: "",           // 搜索框当前检索词（非空 → 命中项跨分组列出，不受分组开合影响）
+      searchBoxMissing: false
     };
 
     var scroller = document.getElementById("screen-scroll-list");
+    var searchInput = document.getElementById("canvas-search");
+    var searchWrap = document.getElementById("canvas-search-wrap");
     var wrap = document.getElementById("group-rows-wrap");
     var rowsUl = document.getElementById("group-rows");
     var foldLi = document.querySelector('li[data-cid="GFOLD"]');
@@ -275,14 +321,59 @@
     // 分组行渲染：
     //   open=false → **全部行常驻 DOM**，仅外层 .canvas-sortable-list 被隐藏（收缩折叠）
     //   open=true  → 只渲染视口附近的若干行（模拟墨刀长列表按需渲染）
+    // 折叠态的表达方式（v1.0.18 定位加固第 2 轮）：
+    //   "aria" → 标准 aria-expanded（旧夹具行为，C/D/E 组依赖，保持不变）
+    //   "data" → **真机形态**：不带 aria-expanded，只用 data-collapsed + class 表达
+    //            → 任何「只认 aria-expanded 的展开启发式」在此形态下**一点用都没有**，
+    //              必须靠墨刀自己的搜索能力（跨分组检索）才能把行找回来。
+    function applyToggleAttr() {
+      if (state.toggleMode === "aria") {
+        foldLi.setAttribute("aria-expanded", state.open ? "true" : "false");
+        foldLi.removeAttribute("data-collapsed");
+        foldLi.classList.remove("is-collapsed");
+      } else {
+        foldLi.removeAttribute("aria-expanded");
+        foldLi.setAttribute("data-collapsed", state.open ? "0" : "1");
+        if (state.open) foldLi.classList.remove("is-collapsed");
+        else foldLi.classList.add("is-collapsed");
+      }
+    }
+
+    // 搜索命中行（跨分组）：非空检索词 → 返回名字或 cid 含该词的行，与分组开合无关。
+    function matchRows() {
+      var q = state.query;
+      if (!q) return null;
+      var out = [];
+      for (var i = 0; i < GROUP.length; i++) {
+        if (GROUP[i].name.indexOf(q) >= 0 || GROUP[i].cid.indexOf(q) >= 0) out.push(GROUP[i]);
+      }
+      return out;
+    }
+
     function renderGroup() {
-      foldLi.setAttribute("aria-expanded", state.open ? "true" : "false");
+      applyToggleAttr();
       var foldInner = foldLi.querySelector("div.rn-list-item.folder");
       if (foldInner) {
         foldInner.textContent = "历史画布（分组）" + (state.open ? "（展开）" : "（折叠）");
       }
+      // 检索态优先：墨刀搜到就列出来，**不受分组开合影响**（这正是折叠行能回来的原因）
+      var matched = matchRows();
+      if (matched) {
+        wrap.style.display = "";
+        var mh = "";
+        for (var m = 0; m < matched.length; m++) mh += rowHtml(matched[m], matched[m].cid === state.active);
+        rowsUl.innerHTML = mh;
+        return;
+      }
       if (!state.open) {
         wrap.style.display = "none";
+        // 真机形态（setCollapsedUnrendered(true)）：折叠 ⇒ 子行**根本不渲染**。
+        // 此时行不在 DOM，滚动扫描无解，「目标行被黑名单类名拒绝」之类的解释也都不成立 ——
+        // 唯二出路是「展开分组」或「用搜索把行找回来」。
+        if (state.collapsedUnrendered) {
+          rowsUl.innerHTML = "";
+          return;
+        }
         var all = "";
         for (var a = 0; a < GROUP.length; a++) all += rowHtml(GROUP[a], GROUP[a].cid === state.active);
         rowsUl.innerHTML = all;
@@ -314,6 +405,14 @@
     scroller.addEventListener("scroll", function () {
       if (state.open) renderGroup();
     });
+
+    // 搜索框：核心用原生 value setter + input/change 事件写值（React 受控组件兼容方式）
+    function onSearchInput() {
+      state.query = (searchInput.value || "").trim();
+      renderGroup();
+    }
+    searchInput.addEventListener("input", onSearchInput);
+    searchInput.addEventListener("change", onSearchInput);
 
     // 点击：记录流水；分组标题行 = 展开/折叠；画布行 = 切换画布（重渲染）
     document.addEventListener("click", function (e) {
@@ -392,10 +491,15 @@
       /** 分组行外层是否被 sortable 列表容器包住（真机在**分组 / 需要滚动**时才复用该
        *  组件；短列表直接挂在画布列下）。用于把「建标签」与「定位」两种状态分开验证。 */
       setWrapped: function (v) {
-        state.wrapped = !!v;
-        wrap.className = state.wrapped ? "canvas-sortable-list" : "canvas-group-wrap";
+        // v = true    → .canvas-sortable-list（与「页面」列同名的 sortable 组件 → BUG-0012 形态）
+        //     "layer" → .layer-sortable-list （与「图层」列同名的 sortable 组件 → BUG-0018 形态）
+        //     false   → 无黑名单名容器包住
+        state.wrapped = (v === "layer") ? "layer" : !!v;
+        wrap.className = (state.wrapped === "layer") ? "layer-sortable-list"
+                       : (state.wrapped ? "canvas-sortable-list" : "canvas-group-wrap");
       },
       isWrapped: function () { return state.wrapped; },
+      wrapClass: function () { return wrap.className; },
       /** 锚点改名模式（v1.0.18 新增）：模拟墨刀改版把「画布」列的容器 id/class 换掉
        *  （#screen-scroll-list → #screen-scroll-list-v2，.screen-list-container →
        *  .screen-panel），使 recent-tabs-core.js 里**没有任何已知画布锚点**匹配，
@@ -414,6 +518,55 @@
         }
       },
       isAnchorRenamed: function () { return state.anchorRenamed; },
+      /** R11（2026-09-17）：去掉分组行上的 `folder` 类名（模拟真机类名漂移）。
+       *  用途：核心展开折叠分组时会**合成 click**，若分组行不带 `folder`，
+       *  文档级点击监听器会把它当成「用户点了画布」→ **凭空长出一个标签**。
+       *  关闭后再走一遍展开流程，断言标签栏里**不得**多出 GFOLD。
+       *  默认 true（保持原行为，不影响既有用例）。 */
+      setFolderClass: function (v) {
+        var on = (v === undefined) ? true : !!v;
+        var inner = foldLi.querySelector("div.rn-list-item");
+        if (on) foldLi.classList.add("folder"); else foldLi.classList.remove("folder");
+        if (inner) { if (on) inner.classList.add("folder"); else inner.classList.remove("folder"); }
+      },
+      hasFolderClass: function () { return foldLi.classList.contains("folder"); },
+
+      // ===== v1.0.18 定位加固第 2 轮：折叠形态 / 搜索框（BUG-0016/0017/0018）=====
+      /** 折叠时子行是否**不渲染**（真机折叠常把子行移出 DOM）。默认关，不影响既有用例。 */
+      setCollapsedUnrendered: function (v) { state.collapsedUnrendered = !!v; renderGroup(); },
+      isCollapsedUnrendered: function () { return state.collapsedUnrendered; },
+      /** 折叠态的表达方式："aria"（标准属性，旧行为）/ "data"（**真机形态**：无 aria-expanded）。
+       *  "data" 下任何「只认 aria-expanded 的展开启发式」都失效 → 只能靠搜索把行找回来。 */
+      setToggleMode: function (v) { state.toggleMode = (v === "data") ? "data" : "aria"; renderGroup(); },
+      isToggleMode: function () { return state.toggleMode; },
+      /** 把「画布」搜索框下推 v 像素（>300 即超出旧代码「视口顶部 300px 内」的限制）。 */
+      setSearchTopPx: function (v) { searchWrap.style.marginTop = (parseInt(v, 10) || 0) + "px"; },
+      /** 改搜索框 placeholder 文案（可换成不含 搜索/查找/检索 的词，模拟真机 UI 文案漂移）。 */
+      setSearchPlaceholder: function (v) { searchInput.setAttribute("placeholder", v == null ? "" : String(v)); },
+      /** 让搜索框「探测不到」：隐藏 + type=hidden（宽高为 0 且类型被拒）。
+       *  用于验证「探测不到搜索框」时定位能力**不得整体短路**。 */
+      setSearchBoxMissing: function (v) {
+        state.searchBoxMissing = !!v;
+        if (state.searchBoxMissing) {
+          searchWrap.style.display = "none";
+          searchInput.setAttribute("type", "hidden");
+        } else {
+          searchWrap.style.display = "";
+          searchInput.setAttribute("type", "text");
+        }
+      },
+      isSearchBoxMissing: function () { return state.searchBoxMissing; },
+      searchValue: function () { return searchInput.value; },
+      /** 分组内当前**已渲染**的行数（用于断言「折叠 ⇒ 子行不在 DOM」）。 */
+      groupRowsCount: function () { return rowsUl.querySelectorAll("li.rn-content-item[data-cid]").length; },
+      /** 分组标题行当前携带的折叠信号（诊断用）：aria 值 + data-collapsed + class。 */
+      toggleSignals: function () {
+        return {
+          aria: foldLi.getAttribute("aria-expanded"),
+          dataCollapsed: foldLi.getAttribute("data-collapsed"),
+          collapsedClass: foldLi.classList.contains("is-collapsed")
+        };
+      },
 
       // ===== v1.0.18（BUG-0014）新增：全量渲染 / 切换复位 / 滚动可视判定 / 选中态 =====
       /** 全量渲染开关：开 → 分组展开时**所有行常驻 DOM**（滚出可见区只被 overflow 裁掉）；
