@@ -184,7 +184,7 @@
     //   locate-robust.2 → 能力串联 + 搜索四级探测 + 黑名单拆分 + aria 展开
     //   locate-robust.3 → 追加末位兜底「按结构展开折叠分组」（expandCollapsedByStructure）
     //                     + 诊断新增 panelStructuralToggles（只统计不点击）
-    var MD_BUILD = "locate-robust.3";
+    var MD_BUILD = "locate-robust.6";
 
     // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
     // 同时存在 div.rn-list-item[data-cid] 与 li.rn-content-item[data-cid] 两种形态，
@@ -942,6 +942,92 @@
       return out;
     }
 
+    // ---- 路径驱动的折叠展开（BUG-0019，2026-09-17 真机取证后新增）----------------------
+    // 取证结论（三条均已实锤，见 CHANGELOG BUG-0019）：
+    //   ① 真机折叠 = 子 `ul` **从 DOM 移除**，DOM 里不留任何折叠痕迹
+    //      （`aria-expanded` 计数为 0；也找不到「可见行内含不可见 ul」）⇒ 事后**检测**折叠不可能；
+    //   ② 左栏**根本没有搜索框**（`.mb-left-panel-container` 内 input/textarea = 0）
+    //      ⇒ 「清空过滤 / 按名检索」两条路在真机恒为空操作；
+    //   ③ 展开入口是文件夹行内的 **`a.expander`**（真实语义类名，非 styled-components 哈希）；
+    //      折叠态 `<li>` 只有 1 个子元素，展开态 2 个（多出一个嵌套 `ul`）。
+    // 故唯一可行解 = **画布可见时（建标签那一刻）记下它的父文件夹 cid 链**，点标签时按记录
+    // 逐级点 `a.expander` 展开。全程不依赖任何事后检测，也不依赖容器锚点。
+    var groupPath = {};                 // cid -> [外层文件夹 cid, …, 内层文件夹 cid]
+
+    // 从被点击的画布行向上收集祖先文件夹 cid（返回顺序：外层 → 内层）。
+    function collectGroupPath(el) {
+      var out = [];
+      var n = el;
+      for (var d = 0; n && d < 12; d++) {
+        n = n.parentElement;
+        if (!n) break;
+        if (String(n.tagName).toUpperCase() !== "LI") continue;
+        for (var i = 0; i < n.children.length; i++) {
+          var c = n.children[i];
+          if (!c.classList || !c.classList.contains("rn-list-item")) continue;
+          if (!c.classList.contains("folder")) continue;      // 叶子画布行不是分组
+          if (rowHasLayerItem(c)) continue;                   // 图层列：绝不记录、绝不点
+          if (matchAncestor(c, LAYER_TREE_HARD_SELECTORS)) continue;
+          var fid = c.getAttribute("data-cid");
+          if (fid) out.push(fid);
+          break;
+        }
+      }
+      return out.reverse();
+    }
+    // 取文件夹行项（真机形态：`div.rn-list-item.folder[data-cid]`）。
+    function folderItemByCid(fid) {
+      if (!fid) return null;
+      var esc = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(fid) : fid;
+      var els = [];
+      try { els = document.querySelectorAll('div.rn-list-item.folder[data-cid="' + esc + '"]'); } catch (e) { return null; }
+      for (var i = 0; i < els.length; i++) {
+        if (rowHasLayerItem(els[i])) continue;
+        if (matchAncestor(els[i], LAYER_TREE_HARD_SELECTORS)) continue;
+        return els[i];
+      }
+      return null;
+    }
+    // 该文件夹是否已展开：展开态的行内会有一个**带布局盒**的嵌套 `ul`。
+    // ⚠ 不能只查 `li.children` 里的直接 UL —— 夹/真机都可能把子列表再包一层 div
+    // （真机：li > [div.rn-list-item, ul]；夹具：li > div.canvas-sortable-list > ul）。
+    // 折叠态要么 ul 不在 DOM，要么被 display:none（无布局盒）→ 两种情况都判 false。
+    // 取不到行时返回 true（宁可不点，也不误点）。
+    function folderRowExpanded(item) {
+      var li = item && item.parentElement;
+      while (li && String(li.tagName).toUpperCase() !== "LI") li = li.parentElement;
+      if (!li) return true;
+      var uls = [];
+      try { uls = li.querySelectorAll("ul"); } catch (e) { return true; }
+      for (var i = 0; i < uls.length; i++) {
+        try { if (uls[i].getClientRects().length > 0) return true; } catch (e2) {}
+      }
+      return false;
+    }
+    // 按记录的 cid 链逐级展开；每点一级等一拍（墨刀 React 重渲染是异步的）。
+    // done(true) = 该展开的都展开了；done(false) = 超时或被新一轮定位作废。
+    function expandRecordedPath(path, token, done) {
+      var i = 0;
+      var deadline = Date.now() + LOCATE_TIMEOUT_MS;
+      function step() {
+        if (token !== revealToken) { done(false); return; }
+        while (i < path.length) {
+          var item = folderItemByCid(path[i++]);
+          if (!item) continue;
+          if (folderRowExpanded(item)) continue;
+          var ex = null;
+          try { ex = item.querySelector("a.expander"); } catch (e) { ex = null; }
+          if (!ex) continue;
+          clickSuppressed(ex);
+          if (Date.now() > deadline) { done(false); return; }
+          setTimeout(step, LOCATE_STEP_MS);
+          return;
+        }
+        done(true);
+      }
+      step();
+    }
+
     // v1.0.13 自动重定位：在 onSwitch 未命中分支、revealCanvasEl 滚动扫描**之前**
     // 调用。真机取证结论：真实墨刀设计页左侧列表**全量渲染**，真正「找不到」的根因
     // 是左侧搜索框处于过滤态（非命中画布被移出 DOM）；故优先把搜索框当作定位工具：
@@ -1033,7 +1119,29 @@
       }
       // 无搜索框可用：跳过搜索两阶段，但**仍然**执行「展开折叠分组」兜底（原来这里直接
       // fail()，正是「折叠不可见」永远修不好的原因）。
-      if (!box) { allFailed(); return; }
+      // BUG-0019：真机常态 = 「搜索框未实例化 + 折叠零痕迹」，此时检索两阶段根本不可用，
+      // 「按记录的父文件夹 cid 链逐级点 a.expander」是唯一主路，故在 !box 分支启用。
+      // ⚠ 只在 !box 时启用（第 3 轮踩到的回归，务必记住）：早期我把它**前置到搜索两阶段之前**，
+      //   等于给每次定位都多塞一轮 2s 轮询，直接把 test_qa_v1013_edge / test_relocate_search
+      //   的等待窗口顶爆（门禁一次红 7 条）。路径展开是**兜底**，不是**前置** ——
+      //   有搜索框时原有两阶段必须原样保留，不得改变时序。
+      if (!box) {
+        var recordedPath = groupPath[id] || null;
+        if (recordedPath && recordedPath.length) {
+          expandRecordedPath(recordedPath, token, function () {
+            if (token !== revealToken) return;
+            locateHandle = pollFind(id, LOCATE_TIMEOUT_MS, LOCATE_STEP_MS, function (el) {
+              locateHandle = null;
+              if (token !== revealToken) return;
+              if (el) { succeed(el); return; }
+              allFailed();                 // 记录的链也救不回来 → 退回展开 + 滚动扫描兜底
+            });
+          });
+          return;
+        }
+        allFailed();
+        return;
+      }
       // 情形二：按目标名检索；名称较长时取前若干字符（子串命中即可）。
       // 定位加固第 2 轮：改为**检索词阶梯**（全名 → 前 8 → 前 4），逐个尝试、命中即停。
       //   理由：真机画布名常带后缀（如「航班座位号查询（说明）」），把整名塞进搜索框可能
@@ -1066,18 +1174,18 @@
         terms = termLadder();
         searchNext();
       }
-      if (originalValue) {
-        // 情形一：清空过滤词 → 目标（若只是被搜索过滤）随全量列表回到 DOM
-        try { setSearchValue(box, ""); } catch (e) { allFailed(); return; }
-        locateHandle = pollFind(id, LOCATE_TIMEOUT_MS, LOCATE_STEP_MS, function (el) {
-          locateHandle = null;
-          if (token !== revealToken) return;
-          if (el) { succeed(el); return; }
-          searchByName();      // 清空后仍找不到 → 情形二
-        });
-      } else {
-        searchByName();        // 搜索框本就为空 → 直接走情形二
-      }
+        if (originalValue) {
+          // 情形一：清空过滤词 → 目标（若只是被搜索过滤）随全量列表回到 DOM
+          try { setSearchValue(box, ""); } catch (e) { allFailed(); return; }
+          locateHandle = pollFind(id, LOCATE_TIMEOUT_MS, LOCATE_STEP_MS, function (el) {
+            locateHandle = null;
+            if (token !== revealToken) return;
+            if (el) { succeed(el); return; }
+            searchByName();      // 清空后仍找不到 → 情形二
+          });
+        } else {
+          searchByName();        // 搜索框本就为空 → 直接走情形二
+        }
     }
 
     // 行是否真正可见（在渲染树里、有布局盒）。display:none / 被折叠 / 已脱离文档 → false。
@@ -2038,6 +2146,9 @@
       var name = readName(item);
       if (touch(id, name)) {
         lastActiveId = id;
+        // BUG-0019：此刻画布是可见的，顺手记下它的父文件夹 cid 链，供日后点标签时
+        // 按记录展开（真机折叠无痕迹、无搜索框，事后检测不出来）。
+        try { groupPath[id] = collectGroupPath(item); } catch (e) { groupPath[id] = []; }
         scheduleRender();
         bar.setActive(id);
         // 浮动模式下标签栏默认隐藏：用户刚点了画布却看不到反馈，会误以为「没建标签」。
@@ -2105,6 +2216,8 @@
     // 真机用法（Console，单行，见 README.browser.md）：
     //   __mdRtProbe()              → 对标签栏里每条最近画布各输出一条诊断
     //   __mdRtProbe('<cid>')       → 只针对指定 id
+    // ⚠ 真机是 isolated world，`__mdRtProbe` 裸调用取不到，必须走
+    //   document.querySelector('#md-recent-tabs-root').__mdRtProbe(...)
     // 输出对象与「定位失败诊断」同构（build / cidHitTotal / rowHitTotal / rejectReason /
     // searchBoxSource / panelCollapsedToggles / panelStructuralToggles / anchors …）。
     try {
@@ -2119,6 +2232,13 @@
         try { console.log("[modao-recent-tabs] 只读探针 probe:", out); } catch (e2) {}
         return out;
       };
+      // 真机可达性修复（BUG-0019）：content script 跑在 **isolated world**
+      // （manifest.json 的 content_scripts 未声明 "world":"MAIN"），挂到 window 上的全局
+      // 对 DevTools Console **不可见** ⇒ 这个探针在真机上从来没被取到过（夹具用
+      // add_script_tag 注入属页面主世界，所以测试一直是绿的）。DOM 节点属性可跨世界读写，
+      // 故把同一个函数再挂到 root 上，真机 Console 用法：
+      //   document.querySelector('#md-recent-tabs-root').__mdRtProbe()
+      if (root) root.__mdRtProbe = global.__mdRtProbe;
     } catch (e) {}
 
     var ctrl = {

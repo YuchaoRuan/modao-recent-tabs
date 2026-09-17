@@ -37,10 +37,96 @@
 | **BUG-0016** | **≤ v1.0.13（原始设计缺陷，非回归）** | **v1.0.18（定位加固第 2 轮）** | **画布在「收缩折叠」的分组里 → 点标签报「未找到画布，请先在左侧画布栏展开或滚动到它，再点击标签切换」（用户 2026-09-17 再次上报，与 BUG-0012 同话术）。三种容器/黑名单解释都已在前几轮排除，问题仍存在** | **循环依赖：唯一的展开入口 `ensureRowVisible` 只在 `activateCanvas` 内被调用，即「**已经找到行之后**」才尝试展开；而折叠闭合的分组其子行不在 DOM（或 `display:none`）⇒ 找不到行 ⇒ 永远走不到展开。**要展开得先找到行，要找到行得先展开** —— 任何 DOM 契约下都无法收敛** | `tests/test_locate_hidden.py`（**H1 锁定**；A/B 矩阵 6288b2d→regression_fail） |
 | **BUG-0017** | **≤ v1.0.13（原始设计缺陷，非回归）** | **v1.0.18（定位加固第 2 轮）** | **同 BUG-0016 的现象；尤其是真机搜索框文案/位置与代码假定不一致时（真机折叠分组里的画布永远点不到）** | **能力互相短路：`locateCanvas` 开头 `if(!box){fail();return;}`。`findScreenSearchBox` 只认「placeholder 含 搜索/查找/检索 + 宽>40 + 视口顶部 300px 内」三条硬条件，任一与真机 UI 漂移即返回 null ⇒「清空过滤 / 按名检索 / 展开折叠」三条能力被整体跳过，只剩滚动扫描（对折叠行无效）→ 报「未找到画布」** | `tests/test_locate_hidden.py`（**H3 锁定**） |
 | **BUG-0018** | **≤ v1.0.13（与 BUG-0012 同源，只是换了个类名）** | **v1.0.18（定位加固第 2 轮）** | **画布行被 `.layer-sortable-list` 包住时（「画布」列在存在分组 / 需要滚动时复用该组件）点标签报「未找到画布，请先在左侧画布栏展开或滚动到它」** | **`.layer-sortable-list` 与页面列的 `.canvas-sortable-list` 属**同一套 sortable 组件**、同样会被「画布」列复用，却在图层树黑名单里被**无条件拒绝** → 行即使在 DOM 里也永远查不到。BUG-0012 只给 page-list 类名开了「画布列优先」的口子（改判 `canvasWrapped`），layer-tree 的组件类名没开** | `tests/test_locate_hidden.py`（**H4 锁定**） |
+| **BUG-0019** | **≤ v1.0.13（长年存在；前 7 轮修的都是判据，未触及真因）** | **v1.0.18（定位加固第 3 轮，`MD_BUILD=locate-robust.5`）** | **点左栏画布建标签 → 收缩折叠其父文件夹 → 点该画布的标签 → 「无法正常定位上一个画布的位置，也无法显示画布」；真机同时出现「左栏滚了但滚错位置」与 toast「未找到画布…」。用户第 8 次上报同一现象** | **三个根因叠加，前两个使「事后检测折叠」在物理上不可能**：① 真机折叠 = 子 `ul` **移出 DOM**、DOM 里零痕迹（`ariaExpanded.count=0`、`structCandidates=[]`）⇒ aria / 结构判据都无对象；② `CANVAS_PANEL_SELECTORS` 四个锚点在真机**全部失配**（scroller 只剩 `.rn-content-body.scrollbar2-container`），而两个展开函数有「无锚点直接返回 0」的护栏 ⇒ **静默空操作**；③ 左栏搜索框**未点「搜索画布」前不渲染**，`findScreenSearchBox()` 恒 null ⇒ 检索链整体跳过 | `tests/test_locate_hidden.py::test_h8_real_machine_expander`（**15 条断言**；A/B：`b1adeef` → **9/15 失败**，toast 逐字命中用户原话） |
+
+---
+
+## 一之二、已知红灯（**未修复**，单独开一轮专修）
+
+> 登记理由：不写下来就等于丢。这两个失败**不是 BUG-0019 引入的** —— 已用 `b1adeef` 的核心
+> 换盘实测，两条在基线上以**完全相同的断言、完全相同的数值**失败（见下「验证」列）。
+> 它们让全量门禁 `rc≠0`，故 BUG-0019 本轮**不满足**「门禁 rc=0 才可发版」这一条，
+> 经用户同意：**本轮先提交，红灯下一轮专修**。
+
+| BUG-ID | 状态 | 现象 | 初步定位 | 影响面 | 验证 |
+|---|---|---|---|---|---|
+| **BUG-0020** | **未修复**（下一轮专修） | 「按名检索失败后的兜底」**没跑完**：既未弹出 toast，搜索框也卡在注入的检索词上（期望还原为原值） | `searchNext()` 耗尽检索词阶梯后应走 `allFailed()` → `restoreSearch()` + `fail()`；实际未到达收尾。可能是时序（等待窗口被吃光）或能力编排 | **不影响真机用户场景**：真机搜索框未实例化，根本走不到这条分支 | `test_qa_v1013_edge.py` Q4 组 **4/8**（`got='订单详情'`，期望 `'航班'`）；`test_relocate_search.py` **8/11**（`got='消息通知'`，期望 `''`）；两者在 `b1adeef` 上**失败得完全一致** |
+
+> ⚠ 顺带发现一件更要紧的事：上一轮（定位加固第 2 轮）CHANGELOG 的「本轮门禁结果」写着
+> **「待填」** ⇒ **全量门禁从第 2 轮起就没被真正跑绿过**。2026-09-17 是第一次完整跑它，
+> 一跑就暴露了这两个红灯。以后每轮收尾都必须真的跑 `scripts/regress.py`，不能只跑新增用例。
 
 ---
 
 ## 二、版本明细
+
+#### 定位加固第 3 轮（2026-09-17，BUG-0019）
+
+> **真机已由用户按 3 步复现验证通过（2026-09-17 20:50，构建 `locate-robust.4`）。**
+> 本轮把「真机实测到的 DOM 契约」落成夹具与用例，并完成 A/B 反向对照。
+
+**为什么前 7 轮修不掉（本轮取证才拿到答案）**
+
+前三轮（BUG-0012/0013/0015）修的是**判据**，第 2 轮（BUG-0016/0017/0018）修的是**调用顺序与编排**。
+本轮取证证明：**在真机 DOM 下，「事后检测折叠」这条路根本不存在**，所以任何判据都修不好：
+
+| 真机实测 | 后果 |
+|---|---|
+| 折叠 = 子 `ul` **移出 DOM**；`ariaExpanded.count = 0`；`structCandidates = []` | aria 展开、结构展开**都没有对象**可作用 |
+| scroller 只有 `.rn-content-body.scrollbar2-container`，`#screen-scroll-list` 等锚点**全部失配** | 两个展开函数「无锚点 ⇒ 返回 0」的护栏触发 ⇒ **不报错、直接空操作**（极易被误判为「判据没匹配上」） |
+| 左栏 `input/textarea` 数为 0（**搜索框需先点「搜索画布」按钮才渲染**） | `findScreenSearchBox()` 恒 null ⇒ 检索重定位整条链被跳过 |
+
+**修复（路径驱动，取代猜测驱动）**
+
+- **S1 记录父分组链**：`trackCanvasFromEvent` 建标签时（此刻画布可见）调 `collectGroupPath()`，
+  收集祖先文件夹 cid（外层→内层）存进 `groupPath[id]`。文件夹行识别用**行自身**的
+  `div.rn-list-item.folder`（不依赖容器锚点），并用 `layer-item` + 面板级硬黑名单排除图层列。
+- **S2 按记录展开**：`expandRecordedPath()` 逐级 `clickSuppressed(item.querySelector("a.expander"))`，
+  每级等 `LOCATE_STEP_MS`（墨刀 React 重渲染是异步的）。`a.expander` 是**真实语义类名**
+  （非 styled-components 哈希），真机实测确认。
+- **S3 已展开判定**：`folderRowExpanded()` 用「行内是否存在**带布局盒**的 `ul`」。
+  ⚠ 不能只查 `li.children` 的直接 UL —— 真机是 `li > [div, ul]`，夹具是 `li > div > ul`，
+  两种都要覆盖。
+- **S4 编排前置**：`locateCanvas` 把「路径展开」放在搜索两阶段与 aria 展开**之前**
+  （后者在真机恒为空操作）。路径走不通再退回老路，不丢兜底。
+- **S5 探针可达性修复**：content script 是 **isolated world**（`manifest.json` 未声明
+  `"world":"MAIN"`），挂在 `window` 上的 `__mdRtProbe` 对 DevTools Console **不可见** ——
+  这个探针此前在真机上**从来没被取到过**（夹具用 `add_script_tag` 注入属页面主世界，所以测试一直绿）。
+  现同时挂到 `root.__mdRtProbe`（DOM 节点属性跨世界可读写）。
+
+**验证（A/B 反向对照，缺一不可）**
+
+| 核心 | H8 | 现象 |
+|---|---|---|
+| 当前（`locate-robust.5`） | **15/15 PASS** | 定位成功、分组展开、标题切换、无 toast |
+| `b1adeef`（修复前 = `locate-robust.3`） | **9/15 FAIL** | toast **逐字命中用户原话**「未找到画布「历史画布 05」，请先在左侧画布栏展开或滚动到它，再点击标签切换」；`clickLog=[]`、标题未切换、分组未展开 |
+| H1–H7 在 `b1adeef` 上 | 11/10/8/12/9/12 **全过** | 无误伤，失败**只**落在 H8 |
+
+**夹具教训（本轮踩到的两个坑，务必记）**
+
+1. **假绿：夹具折叠时仍留着「空的隐藏 `ul`」** → 旧核心的 R9（结构判据：可见行内含不可见 `ul`）
+   照样能展开，H8 在旧核心上也 14/14 全绿。修正：新增 `setCollapsedDetached(true)`，
+   折叠时把子列表容器**整个 `removeChild`**（真机实测折叠态 `<li>` 只有 1 个子元素）。
+   **默认关**，保持 H1/H5 原样不变。
+2. **A/B 假失败：用 PowerShell 裸 `>` 导出 `git show <ref>:recent-tabs-core.js` 会写成 UTF-16LE**
+   （`\xff\xfe` BOM）→ Playwright 读它抛 `UnicodeDecodeError` → **每一组都只记 1 条断言且失败（0/1）**，
+   看起来像「旧版本必现缺陷」，其实是**旧核心压根没跑起来**。
+   判据：**看到「所有组都 0/1」= 编码问题，不是证据**。改用 Python `subprocess` 落盘 UTF-8。
+
+**未能覆盖 / 仍待办**
+
+- **路径只记在内存**：刷新页面后旧标签没有路径记录，仍会退回老路（大概率仍失败）。
+  是否持久化到 localStorage 待用户决定（现有 `seen` 本身就没有落盘，加它属于新增持久化面）。
+- **「滚错位置」的回滚未修**：`:701` 的 `sc.scrollTop = start` 在真机没生效，原因未查。
+  主路径通了之后再单独动它，避免一次改两处说不清因果。
+- **搜索框兜底未做**：已知搜索框需先点「搜索画布」按钮，按钮 DOM 签名已给出取证脚本但尚未取样。
+
+**影响文件**：`recent-tabs-core.js`、`desktop/recent-tabs-core.js`、
+`tests/fixtures/mock-modao-design-collapsed.html`（新增 `expander` 模式 + `setCollapsedDetached`）、
+`tests/test_locate_hidden.py`（新增 H8；`current_build()` 改为从被测核心读出，不再硬编码指纹）、
+`tests/ab_expectations.json`、`CHANGELOG.md`（本文件）。⚠ 三处版本号仍冻结 `1.0.18`。
+
+---
 
 ### v1.0.18（开发中，待发布）
 

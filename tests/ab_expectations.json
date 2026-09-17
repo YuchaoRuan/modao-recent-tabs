@@ -33,6 +33,11 @@
       "ref": "6288b2d",
       "note": "定位加固第 2 轮（BUG-0016/0017/0018）的「引入前最后一版」。三个缺陷都是结构性缺陷，**所有历史版本都没有对应能力**，故无 regression_pass 对照：6288b2d 必须在【回归】组失败并复现用户原话「未找到画布，请先在左侧画布栏展开或滚动到它，再点击标签切换」；当前核心通过由 regress.py [2/4] 全量回归覆盖。⚠ v1.0.16 不可作为本用例的 regression_pass 对照（H1/H3 在 v1.0.16 上同样失败）。",
       "expect": "regression_fail"
+    },
+    {
+      "ref": "b1adeef",
+      "note": "BUG-0019（真机折叠零痕迹 + a.expander + 无搜索框）的「引入前最后一版」= locate-robust.3 基线。H8 在此**必然失败**：aria 展开只认 aria-expanded（真机 0 个）、结构展开找不到「不可见 ul」（子行已移出 DOM），两者都返回 0 → fail() → 弹「未找到画布」。本缺陷同样无 regression_pass 对照（所有历史版本都缺「记录父分组链」这一能力）。",
+      "expect": "regression_fail"
     }
   ]
 }

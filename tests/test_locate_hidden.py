@@ -52,6 +52,7 @@ A/B：scripts/regress.py 按 tests/ab_expectations.json 用 `--core <历史核�
   故只登记「引入前最后一版 6288b2d → regression_fail」，当前核心通过由 [2/4] 全量回归覆盖。
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -70,6 +71,16 @@ WAIT_MS = 4500           # 展开 + 轮询（≤2s）+ keepRowVisible（800ms）
 
 CARRIER = "ext"          # --carrier ext|desktop
 CORE_PATH = None         # --core <path>：注入任意版本核心做 A/B
+
+
+def current_build():
+    """从被测核心源码里读出 `MD_BUILD`（不硬编码，避免每次加固后本用例假失败）。"""
+    try:
+        with open(core_file(), encoding="utf-8") as f:
+            m = re.search(r'var\s+MD_BUILD\s*=\s*"([^"]+)"', f.read())
+        return m.group(1) if m else None
+    except Exception:
+        return None
 
 
 def core_file():
@@ -223,7 +234,7 @@ def is_visible(page, cid):
 
 
 def to_hidden(page, *, unrendered, toggle_mode, missing_box=None, placeholder=None, top_px=None,
-              wrapped=True):
+              wrapped=True, detached=False):
     """把夹具切到「目标行不可见」的状态，并返回该状态下的观测量。"""
     page.evaluate(
         """(o) => {
@@ -231,6 +242,7 @@ def to_hidden(page, *, unrendered, toggle_mode, missing_box=None, placeholder=No
             m.setGroupOpen(false);
             m.setFullRender(false);
             m.setCollapsedUnrendered(!!o.unrendered);
+            m.setCollapsedDetached(!!o.detached);
             m.setToggleMode(o.toggleMode);
             m.setWrapped(o.wrapped);
             if (o.missingBox !== null) m.setSearchBoxMissing(o.missingBox);
@@ -240,6 +252,7 @@ def to_hidden(page, *, unrendered, toggle_mode, missing_box=None, placeholder=No
         {
             "unrendered": unrendered, "toggleMode": toggle_mode, "wrapped": wrapped,
             "missingBox": missing_box, "placeholder": placeholder, "topPx": top_px,
+            "detached": detached,
         },
     )
     page.wait_for_timeout(200)
@@ -462,8 +475,12 @@ def test_h6_probe_readonly(browser, base):
                 % (len(got) if isinstance(got, list) else None,
                    got[0].get("id") if isinstance(got, list) and got else None))
         d = got[0] if isinstance(got, list) and got else {}
-        t.check(d.get("build") == "locate-robust.3",
-                "【需求】诊断带正确的构建指纹（build=%r）" % d.get("build"))
+        # ⚠ 不要硬编码构建指纹：MD_BUILD 每次加固都会变（.3 → .4 …），写死会让本用例
+        # 在每次改版后**假失败**。直接从被测核心源码里读出期望值，本用例才真正只测
+        # 「诊断里带的指纹 == 这份核心自己的指纹」。
+        expect_build = current_build()
+        t.check(d.get("build") == expect_build,
+                "【需求】诊断带正确的构建指纹（build=%r，期望 %r）" % (d.get("build"), expect_build))
         t.check(isinstance(d.get("panelStructuralToggles"), int) and d["panelStructuralToggles"] >= 1,
                 "【需求】折叠态下结构判据认得出折叠分组行 (panelStructuralToggles=%r)"
                 % d.get("panelStructuralToggles"))
@@ -560,6 +577,75 @@ def test_h2_canvas_column_unloaded(browser, base):
     return t
 
 
+# ---------- H8：真机契约 BUG-0019（折叠零痕迹 + a.expander + 无搜索框）--------------------
+def test_h8_real_machine_expander(browser, base):
+    """【回归】**2026-09-17 真机实测契约**，三条同时成立：
+      ① 折叠 = 子 `ul` 移出 DOM，且 DOM 里**不留任何折叠标记**（无 aria-expanded、
+         无 data-collapsed、无 is-collapsed）⇒ **事后检测折叠在物理上不可能**；
+      ② 唯一展开入口是文件夹行内的 `a.expander`（真实语义类名）；
+      ③ 左栏搜索框**未实例化**（未点「搜索画布」前不存在）⇒ 检索/aria 两条老路恒空操作。
+    旧核心（b1adeef，即 locate-robust.3）在此**必然失败**：`expandCollapsedInCanvasPanel`
+    只认 aria（此处为 0 个）、`expandCollapsedByStructure` 找不到「不可见 ul」（子行已出 DOM），
+    两者都返回 0 → `fail()` → 滚动扫描 → 弹「未找到画布」。
+    修复版靠「建标签时记录的父文件夹 cid 链」逐级点 `a.expander` 把行带回 DOM。
+    """
+    t = Tester("H8 真机契约（折叠零痕迹 + a.expander + 无搜索框）→ 必须靠记录的父分组链定位")
+    ctx, page = new_page(browser)
+    try:
+        boot(page, base)
+        t.check(build_tab(page, TARGET), "前置：%s 标签已建立 (tabs=%s)" % (TARGET, tab_ids(page)))
+        to_hidden(page, unrendered=True, toggle_mode="expander", missing_box=True, detached=True)
+
+        t.check(page.evaluate("() => window.__mock.hasExpander()"),
+                "前置：文件夹行内存在真机展开入口 a.expander")
+        sig = page.evaluate("() => window.__mock.toggleSignals()")
+        t.check(sig["aria"] is None and sig["dataCollapsed"] is None,
+                "前置：折叠在 DOM 里零痕迹（无 aria / 无 data-collapsed）signals=%s" % sig)
+        t.check(page.evaluate(
+            "() => document.querySelectorAll('#panel-canvas-col [aria-expanded=\"false\"]').length") == 0,
+            "前置：画布列内没有任何 aria-expanded=false（aria 展开恒为空操作）")
+        t.check(group_rows(page) == 0, "前置：折叠后子行不在 DOM（分组渲染行数=%d）" % group_rows(page))
+        t.check(page.evaluate(
+            """() => {
+                var li = document.querySelector('li[data-cid="GFOLD"]');
+                return !li || li.querySelectorAll('ul').length === 0;
+            }"""),
+            "前置：折叠态下分组行内**根本不存在** ul（真机形态，R9 结构判据必然无对象）")
+        t.check(page.evaluate(
+            """() => {
+                var b = document.getElementById('canvas-search');
+                if (!b) return false;
+                var r = b.getBoundingClientRect();
+                return (b.getAttribute('type') || '') === 'hidden' && r.width <= 40;
+            }"""),
+            "前置：搜索框未实例化（type=hidden + 宽<=40）")
+        hide_toast(page)
+        reset_title(page)
+        reset_clicks(page)
+
+        click_tab(page, TARGET)
+        seen = collect_toast(page, WAIT_MS)
+        t.check("未找到画布" not in seen,
+                "【回归】点标签未弹「未找到画布」(toast=%r)" % seen)
+        t.check(bool([c for c in click_log(page) if c["cid"] == TARGET]),
+                "【回归】目标行被点击（按记录的父分组链展开后定位成功）(log=%s)" % click_log(page))
+        t.check(is_visible(page, TARGET), "【回归】目标行已回到可视区（定位到画布所在位置）")
+        protections(t, page, "H8")
+
+        t.check(TARGET_TITLE in (title(page) or ""),
+                "【需求】画布内容已显示（标题切到 %r）(title=%r)" % (TARGET_TITLE, title(page)))
+        t.check(page.evaluate("() => window.__mock.isGroupOpen()"),
+                "【需求】包含该行的分组已被展开（点过 a.expander）")
+        t.check("GFOLD" not in tab_ids(page),
+                "【保护】展开用的自产 click 未凭空长出分组标签 (tabs=%s)" % tab_ids(page))
+    except Exception as e:
+        t.check(False, "异常: %r" % e)
+        screenshot(page, "locate_h8")
+    finally:
+        ctx.close()
+    return t
+
+
 def main():
     global CARRIER, CORE_PATH
     argv = sys.argv[1:]
@@ -590,6 +676,7 @@ def main():
             total_fails += test_h5_no_aria_no_searchbox(browser, base).summary()
             total_fails += test_h6_probe_readonly(browser, base).summary()
             total_fails += test_h7_selfclick_no_spurious_tab(browser, base).summary()
+            total_fails += test_h8_real_machine_expander(browser, base).summary()
             total_fails += test_h2_canvas_column_unloaded(browser, base).summary()
             print("\n==== 定位加固第 2 轮回归总计：%d 失败 ====" % total_fails)
             os._exit(1 if total_fails else 0)

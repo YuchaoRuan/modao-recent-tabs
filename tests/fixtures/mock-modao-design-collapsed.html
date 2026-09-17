@@ -278,6 +278,8 @@
       toggleMode: "aria",
       // 折叠时子行是否**不渲染**（真机折叠常把子行移出 DOM）—— 此时连「行在 DOM 里被隐藏」都不成立
       collapsedUnrendered: false,
+      // BUG-0019：折叠时子列表容器是否整个脱离 DOM（真机实测形态）。仅 H8 开启。
+      collapsedDetached: false,
       query: "",           // 搜索框当前检索词（非空 → 命中项跨分组列出，不受分组开合影响）
       searchBoxMissing: false
     };
@@ -331,6 +333,14 @@
         foldLi.setAttribute("aria-expanded", state.open ? "true" : "false");
         foldLi.removeAttribute("data-collapsed");
         foldLi.classList.remove("is-collapsed");
+      } else if (state.toggleMode === "expander") {
+        // BUG-0019 真机契约：折叠**在 DOM 里不留任何标记**（无 aria-expanded、无
+        // data-collapsed、无 is-collapsed），唯一入口是文件夹行内的 `a.expander`。
+        // 故此处刻意**不写**任何折叠信号 —— 任何「检测折叠态」的实现在此模式下都无解，
+        // 只能靠「点击可见画布时记录父文件夹 cid 链」这种事前记录。
+        foldLi.removeAttribute("aria-expanded");
+        foldLi.removeAttribute("data-collapsed");
+        foldLi.classList.remove("is-collapsed");
       } else {
         foldLi.removeAttribute("aria-expanded");
         foldLi.setAttribute("data-collapsed", state.open ? "0" : "1");
@@ -355,6 +365,15 @@
       var foldInner = foldLi.querySelector("div.rn-list-item.folder");
       if (foldInner) {
         foldInner.textContent = "历史画布（分组）" + (state.open ? "（展开）" : "（折叠）");
+        // BUG-0019 真机契约：展开入口是文件夹行内的 `a.expander`（真实语义类名，
+        // 不是 styled-components 哈希）。仅在 "expander" 模式注入，保持既有模式原样。
+        if (state.toggleMode === "expander") {
+          var ex = document.createElement("a");
+          ex.className = "expander";
+          ex.setAttribute("data-qa", "expander-GFOLD");
+          ex.innerHTML = '<svg class="icon common/expand arrow-icon svg-icon"></svg>';
+          foldInner.appendChild(ex);
+        }
       }
       // 检索态优先：墨刀搜到就列出来，**不受分组开合影响**（这正是折叠行能回来的原因）
       var matched = matchRows();
@@ -372,6 +391,14 @@
         // 唯二出路是「展开分组」或「用搜索把行找回来」。
         if (state.collapsedUnrendered) {
           rowsUl.innerHTML = "";
+          // BUG-0019 真机契约（setCollapsedDetached(true)）：折叠时子列表容器**整个脱离 DOM**
+          // （真机实测折叠态 `<li>` 只有 1 个子元素、子 `ul` 根本不存在），
+          // 而不是「留一个空的隐藏 ul」。这一步是 H8 能否锁定缺陷的**关键**：
+          // 只要文档里还留着「无布局盒的 ul」，旧核心的 R9（结构判据：可见行内含不可见 ul）
+          // 就能照样展开 → H8 在旧核心上也会全绿 → 假绿。
+          if (state.collapsedDetached && wrap.parentNode) {
+            wrap.parentNode.removeChild(wrap);
+          }
           return;
         }
         var all = "";
@@ -379,6 +406,8 @@
         rowsUl.innerHTML = all;
         return;
       }
+      // 重新挂回子列表容器（若上一轮折叠时被 detach —— 节点引用已缓存，不会丢）
+      if (!wrap.parentNode) foldLi.appendChild(wrap);
       wrap.style.display = "";
       if (state.fullRender) {
         // 全量渲染（v1.0.18 · BUG-0014）：分组展开时**保留全部行在 DOM**，滚出可见区的行
@@ -535,9 +564,21 @@
       /** 折叠时子行是否**不渲染**（真机折叠常把子行移出 DOM）。默认关，不影响既有用例。 */
       setCollapsedUnrendered: function (v) { state.collapsedUnrendered = !!v; renderGroup(); },
       isCollapsedUnrendered: function () { return state.collapsedUnrendered; },
-      /** 折叠态的表达方式："aria"（标准属性，旧行为）/ "data"（**真机形态**：无 aria-expanded）。
-       *  "data" 下任何「只认 aria-expanded 的展开启发式」都失效 → 只能靠搜索把行找回来。 */
-      setToggleMode: function (v) { state.toggleMode = (v === "data") ? "data" : "aria"; renderGroup(); },
+      /** 折叠态的表达方式：
+       *   "aria"     → 标准 aria-expanded（旧行为，C/D/E 组依赖）
+       *   "data"     → 真机形态之一：无 aria-expanded，只用 data-collapsed + class
+       *   "expander" → **BUG-0019 实测真机形态**：折叠在 DOM 里**不留任何标记**，
+       *                 唯一入口是文件夹行内的 `a.expander`。此模式下「检测折叠态」无解，
+       *                 只能靠「点可见画布时记录父文件夹 cid 链」这种事前记录（H8）。 */
+      setToggleMode: function (v) {
+        state.toggleMode = (v === "data" || v === "expander") ? v : "aria";
+        renderGroup();
+      },
+      /** 折叠时子列表容器是否**整个脱离 DOM**（BUG-0019 真机实测形态）。默认关，保持 H1/H5 原样。 */
+      setCollapsedDetached: function (v) { state.collapsedDetached = !!v; renderGroup(); },
+      isCollapsedDetached: function () { return state.collapsedDetached; },
+      /** 是否存在真机形态的展开入口 a.expander（H8 前置断言：夹具确实造出了它）。 */
+      hasExpander: function () { return !!document.querySelector('div.rn-list-item.folder a.expander'); },
       isToggleMode: function () { return state.toggleMode; },
       /** 把「画布」搜索框下推 v 像素（>300 即超出旧代码「视口顶部 300px 内」的限制）。 */
       setSearchTopPx: function (v) { searchWrap.style.marginTop = (parseInt(v, 10) || 0) + "px"; },
