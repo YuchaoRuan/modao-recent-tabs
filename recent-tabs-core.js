@@ -184,7 +184,7 @@
     //   locate-robust.2 → 能力串联 + 搜索四级探测 + 黑名单拆分 + aria 展开
     //   locate-robust.3 → 追加末位兜底「按结构展开折叠分组」（expandCollapsedByStructure）
     //                     + 诊断新增 panelStructuralToggles（只统计不点击）
-    var MD_BUILD = "locate-robust.6";
+    var MD_BUILD = "locate-robust.7";
 
     // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
     // 同时存在 div.rn-list-item[data-cid] 与 li.rn-content-item[data-cid] 两种形态，
@@ -1147,6 +1147,14 @@
       //   理由：真机画布名常带后缀（如「航班座位号查询（说明）」），把整名塞进搜索框可能
       //   因墨刀的分词/模糊匹配策略而不命中；截断到合法前缀基本必中。阶梯有界（≤3 个词）。
       var terms = [];
+      // 检索词阶梯的**总预算**（有界）。⚠ BUG-0020 根因：R5 引入阶梯后，每档都用完整的
+      //   LOCATE_TIMEOUT_MS，最坏放大到 3×2s=6s，远超既有用例的等待窗口
+      //   （test_qa_v1013_edge Q4 按「清空 ≤2s + 检索 ≤2s + 兜底」设计的 4700ms；
+      //    test_relocate_search R3 只等 2800ms）→ 兜底（toast + 还原搜索框）来不及执行。
+      //   现改为整段有界、档间均分：能力保留，耗时压回 ≤SEARCH_TOTAL_MS。
+      //   两个常量联动：调大 SEARCH_TOTAL_MS ⇒ 相关用例的等待窗口必须同步放宽。
+      var SEARCH_TOTAL_MS = 2000;
+      var searchDeadline = 0;
       function termLadder() {
         var out = [];
         var n = String(name || "").replace(/\s+/g, " ").trim();
@@ -1160,9 +1168,14 @@
       function searchNext() {
         if (token !== revealToken) return;
         if (!terms.length) { allFailed(); return; }
+        var left = searchDeadline - Date.now();
+        if (left <= 0) { allFailed(); return; }        // 整段预算耗尽 → 不再加档
         typedTerm = terms.shift();
+        // 剩余时间按「剩余档数 + 本档」均分 ⇒ 每档都至少被尝试一次，且整段耗时恒有界。
+        // 下限 2×STEP_MS：保证至少轮询两次，不至于把某一档削成空转。
+        var budget = Math.max(LOCATE_STEP_MS * 2, Math.floor(left / (terms.length + 1)));
         try { setSearchValue(box, typedTerm); } catch (e) { allFailed(); return; }
-        locateHandle = pollFind(id, LOCATE_TIMEOUT_MS, LOCATE_STEP_MS, function (el) {
+        locateHandle = pollFind(id, budget, LOCATE_STEP_MS, function (el) {
           locateHandle = null;
           if (token !== revealToken) return;
           if (el) { succeed(el); return; }
@@ -1171,6 +1184,7 @@
       }
       function searchByName() {
         if (!name) { allFailed(); return; }
+        if (!searchDeadline) searchDeadline = Date.now() + SEARCH_TOTAL_MS;
         terms = termLadder();
         searchNext();
       }
