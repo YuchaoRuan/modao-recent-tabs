@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<!--
+  模拟墨刀企业版「设计文件页」——**画布列可收缩折叠 / 滚动虚拟渲染**版本。
+  （v1.0.18 新增，用于复现并锁定 v1.0.17 引入的「点标签提示未找到画布」回归）
+
+  ★ 被测缺陷（用户原话，2026-09-16）★
+    「曾经打开的画布仍在左侧顶部画布列表中，只是被收缩折叠不可见，点击画布标签
+     提示：未找到画布，请先在左侧画布栏展开或滚动到它，再点击标签切换。」
+    要求：列表中的画布**无论被收缩折叠、还是因滚动不在可见区域**，点画布标签
+          都要能定位到它在左栏的位置并把画布切过去。
+
+  ★ 根因建模（为什么 v1.0.16 可用、v1.0.17 不可用）★
+    v1.0.17 把「下部页面列」的容器类名（#canvas-scroll-list / .canvas-scroll-list /
+    .canvas-sortable-list / #mb-enabled-canvas-list）列进了**黑名单**，findCanvasEl
+    一律拒绝其内的同 cid 行。真机上「画布」列在**需要滚动或存在分组**时，行的外层
+    会被同一个 sortable 列表组件包住，类名正好命中黑名单 → 行虽然存在（甚至就在
+    DOM 里），findCanvasEl 却恒为 null → 定位链走完 → 弹「未找到画布」。
+    故本夹具把分组行放在 `div.canvas-sortable-list` 里（**黑名单名容器**），
+    这正是「嵌在被黑名单命名的容器里」这一真实形态。
+
+  ★ 界面语义（沿用 mock-modao-design-panels.html 的真机核对结论，不得搞反）★
+    左栏上部「画布」列   = .screen-list-container > #screen-scroll-list，名不带序号
+                          → 点它应当建标签，且是「最近画布」跟踪对象。
+    左栏下部「页面」列   = #canvas-scroll-list.canvas-scroll-list >
+                          .canvas-sortable-list > ul#mb-enabled-canvas-list，名带序号
+                          → 点它不得建标签。
+    左栏下部「图层」列   = #layer-scroll-list.layer-scroll-list >
+                          .layer-sortable-list > ul#mb-enabled-layer-list
+                          → 点它不得建标签；内含与画布列**同 data-cid** 的节点，
+                            专杀「按 cid 乱点」的实现。
+
+  ★ 两个场景（由 __mock.setGroupOpen 控制）★
+    A. 收缩折叠不可见（open=false）：分组内 30 行**全部常驻 DOM**，仅外层
+       .canvas-sortable-list 被 display:none 隐藏 —— 复现「折叠但节点仍在」。
+       v1.0.16：findCanvasEl 不看可见性，命中 → el.click() → 事件委托切换 ✓
+       v1.0.17：行在黑名单容器内 → findCanvasEl 恒 null → 「未找到画布」 ✗
+    B. 滚动不在可见区域（open=true）：分组展开，行按视口虚拟渲染，滚出视口的行
+       **不在 DOM**。需滚动扫描把它带回渲染窗口后再定位。
+       v1.0.16：滚动扫描 → 行渲染 → findCanvasEl 命中 → 切换 ✓
+       v1.0.17：滚动扫描到位，但行仍在黑名单容器内 → findCanvasEl 恒 null ✗
+
+  ★ 夹具暴露的测试 API（window.__mock）★
+    setGroupOpen(bool) / isGroupOpen()
+    setWrapped(bool) / isWrapped()      分组行外层是否被 sortable 容器（黑名单名）包住
+                                        —— 真机只在**分组 / 需要滚动**时复用该组件，
+                                        故夹具允许切换，把「建标签」与「定位」分开验证
+    setAnchorRenamed(bool) / isAnchorRenamed()
+                                        把「画布」列容器锚点改名（#screen-scroll-list →
+                                        #screen-scroll-list-v2，.screen-list-container →
+                                        .screen-panel），模拟墨刀改版换名 —— 此时
+                                        recent-tabs-core.js **无任何已知画布锚点**匹配，
+                                        而真画布行依旧存在（可再叠加 setWrapped）。
+                                        （v1.0.18 · BUG-0013 锁定：定位不得依赖锚点识别）
+    render()                            按当前状态重渲染分组行
+    scrollToCid(cid)                    把滚动位置移到目标行附近
+    scrollerTop() / scrollerMax()       滚动容器当前 / 最大 scrollTop
+    inDom(cid)                          该 cid 的行当前是否在 DOM
+    isVisible(cid)                      该 cid 的行是否真正可见（getClientRects 非空）
+    setFullRender(bool) / isFullRender()
+                                        全量渲染：开 → 分组展开时**所有行常驻 DOM**
+                                        （滚出可见区的行只被 overflow 裁掉，不卸载）
+    setResetOnSwitch(bool) / isResetOnSwitch()
+                                        切换复位：开 → 每次切换画布后重渲染左栏并把
+                                        滚动容器 scrollTop 归零、重建行节点
+                                        （复现「点标签后列表刷新回到顶部」BUG-0014）
+    setMoldeActive(bool) / isMoldeActive()
+                                        墨刀自身是否给激活行加 .is-active（默认开）；
+                                        关掉后「左栏选中态」只能由核心的 md-rt-located 提供
+    isRowInScroller(cid)                目标行是否落在画布列滚动容器的可视矩形内
+                                        （与核心 isRowInScroller 同口径，上下各 4px 容差）
+    activeRowCid()                      左栏带选中类（墨刀激活类 或 我方 md-rt-located）的行的 cid
+    clickLog() / resetClicks()          [{cid,name,place,panel}] 点击流水
+    setActive(cid) / title() / setTitle(t)
+    setPanels({canvas,page,layer})      卸载/恢复左栏列（模拟墨刀 nav 互斥切换）
+    domCount()                          当前树项总数
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .app-shell { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
+    .app-header {
+      position: relative; top: 0; left: 0; right: 0; height: 48px;
+      background: #fff; border-bottom: 1px solid #e5e7eb;
+      display: flex; align-items: center; padding: 0 16px; z-index: 100;
+    }
+    .app-header .logo { font-weight: 700; color: #2d7ff9; }
+    .rn-sidebar {
+      position: absolute; top: 48px; left: 0; width: 260px; bottom: 0;
+      background: #f7f8fa; border-right: 1px solid #e5e7eb; padding: 8px;
+      overflow: hidden; display: flex; flex-direction: column;
+    }
+    .rn-panel { margin-bottom: 6px; }
+    .rn-panel-label { font-size: 11px; color: #8f959e; padding: 2px 0 4px; }
+    /* 画布列：可滚动视口（长列表 → 触发滚动 / 虚拟渲染）。
+       `.canvas-col-scroll` 与 id 等价：锚点改名模式（setAnchorRenamed(true)）会把 id 从
+       #screen-scroll-list 改掉，靠这个稳定 class 保住滚动行为（否则改名就把长列表
+       变成不可滚动，测不出滚动场景）。 */
+    #screen-scroll-list, .canvas-col-scroll { height: 420px; overflow-y: auto; overflow-x: hidden; }
+    li.rn-content-item {
+      display: block; list-style: none; padding: 4px 6px; margin-bottom: 3px;
+      cursor: pointer; font-size: 13px; color: #1f2329;
+    }
+    li.rn-content-item > div.rn-list-item {
+      padding: 4px 8px; border-radius: 6px; line-height: 18px; min-height: 18px;
+      height: 26px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    li.rn-content-item:hover > div.rn-list-item { background: #eef3ff; }
+    li.rn-content-item > div.rn-list-item.is-active {
+      background: #eef3ff; color: #2d7ff9; font-weight: 600;
+    }
+    li.rn-content-item.folder > div.rn-list-item.folder { color: #646a73; font-style: italic; }
+    /* 分组内画布的外层包装：真机复用 sortable 列表组件 → 类名落在 v1.0.17 黑名单里 */
+    .canvas-sortable-list { }
+    #panel-page-col #canvas-scroll-list { height: 140px; overflow-y: auto; }
+    #panel-layer-col #layer-scroll-list { height: 160px; overflow-y: auto; }
+    .rn-canvas { position: absolute; top: 48px; left: 260px; right: 220px; bottom: 0; padding: 24px; }
+    .rn-right-panel {
+      position: absolute; top: 48px; right: 0; width: 220px; bottom: 0;
+      background: #f7f8fa; border-left: 1px solid #e5e7eb; padding: 8px; overflow: auto;
+    }
+    .canvas-title { font-size: 18px; font-weight: 600; }
+    .vspacer { width: 1px; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="app-header styles__StyledTopBar-sc-121m7wg-0 jBNgew" role="banner">
+      <span class="logo">墨刀 · 内网（画布列折叠 / 滚动夹具）</span>
+    </div>
+
+    <aside class="rn-sidebar">
+
+      <!-- ============ 左栏上部：「画布」列（#screen-scroll-list）============ -->
+      <div class="rn-panel" id="panel-canvas-col">
+        <div class="rn-panel-label">画布</div>
+        <div class="screen-list-container" id="canvas-col-container">
+          <div id="screen-scroll-list" class="canvas-col-scroll">
+            <ul class="rn-tree" id="canvas-top-list">
+              <!-- 顶层可见画布：一直渲染，用于「滚动宿主」定位与对照 -->
+              <li class="rn-content-item" data-cid="C0" data-qa="canvas-C0" data-qa-panel="canvas">
+                <div class="rn-list-item page" data-cid="C0"
+                     data-interactive-target-type="page">首页画布（当前）</div>
+              </li>
+            </ul>
+            <!-- 可收缩折叠的「历史画布」分组 -->
+            <ul class="rn-tree" id="canvas-group-list">
+              <li class="rn-content-item folder" data-cid="GFOLD" data-qa="canvas-GFOLD"
+                  data-qa-panel="canvas" aria-expanded="false">
+                <div class="rn-list-item folder" data-cid="GFOLD">历史画布（分组）</div>
+                <!-- ★ 黑名单名容器 ★：真机上分组/滚动时的行就被这个 sortable 列表包住 -->
+                <div class="canvas-sortable-list" id="group-rows-wrap">
+                  <ul class="rn-tree" id="group-rows"></ul>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 左栏下部面板：「页面」列（#mb-enabled-canvas-list）============ -->
+      <div class="rn-panel" id="panel-page-col">
+        <div class="rn-panel-label">页面</div>
+        <div id="canvas-scroll-list" class="canvas-scroll-list">
+          <div class="canvas-sortable-list">
+            <ul id="mb-enabled-canvas-list" class="rn-tree">
+              <li class="rn-content-item" data-cid="P1" data-qa="page-P1" data-qa-panel="page">
+                <div class="rn-list-item layer-item interactive-target-hotspot" data-cid="P1"
+                     data-interactive-target-type="canvasList">1 首页画布</div>
+              </li>
+              <li class="rn-content-item" data-cid="P2" data-qa="page-P2" data-qa-panel="page">
+                <div class="rn-list-item layer-item interactive-target-hotspot" data-cid="P2"
+                     data-interactive-target-type="canvasList">2 历史画布 05</div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 左栏下部面板：「图层」列 ============ -->
+      <div class="rn-panel" id="panel-layer-col">
+        <div class="rn-panel-label">图层</div>
+        <div id="layer-scroll-list" class="layer-scroll-list">
+          <div class="layer-sortable-list">
+            <ul id="mb-enabled-layer-list" class="rn-tree">
+              <!-- 与画布列 C0 / G05 共用 data-cid（真机图层树里的画板节点形态）-->
+              <li class="rn-content-item" data-cid="C0" data-qa="layer-C0" data-qa-panel="layer">
+                <div class="rn-list-item layer-item" data-cid="C0"
+                     data-interactive-target-type="">首页画布 / 矩形 1</div>
+              </li>
+              <li class="rn-content-item" data-cid="G05" data-qa="layer-G05" data-qa-panel="layer">
+                <div class="rn-list-item layer-item" data-cid="G05"
+                     data-interactive-target-type="">历史画布 05 / 文本 2</div>
+              </li>
+              <li class="rn-content-item" data-cid="L9" data-qa="layer-L9" data-qa-panel="layer">
+                <div class="rn-list-item layer-item" data-cid="L9"
+                     data-interactive-target-type="">图片 3</div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <main class="rn-canvas">
+      <div class="canvas-title">首页画布（当前）</div>
+      <div>画布编辑区（模拟）</div>
+    </main>
+
+    <aside class="rn-right-panel">
+      <div class="canvas-title">属性面板</div>
+      <div>右侧检查器（模拟）</div>
+    </aside>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    var ROW_H = 31;        // li 高度（26 + 4 padding + 3 margin ≈ 31，取整便于计算）
+    var N = 30;            // 分组内画布数
+    var TOP_H = 62;        // C0 行 + 分组标题行 占位高度（组内偏移）
+
+    // 分组内画布：G01..G30
+    var GROUP = [];
+    for (var i = 1; i <= N; i++) {
+      var n = i < 10 ? "0" + i : String(i);
+      GROUP.push({ cid: "G" + n, name: "历史画布 " + n });
+    }
+
+    var state = {
+      open: false, active: "C0", clicks: [], wrapped: true, anchorRenamed: false,
+      fullRender: false,   // v1.0.18（BUG-0014）：全量渲染 —— 滚出可见区的行保留在 DOM，仅被 overflow 裁掉
+      resetOnSwitch: false, // v1.0.18（BUG-0014）：切换后重渲染左栏并把滚动容器 scrollTop 归零
+      moldeActive: true    // v1.0.18：是否由墨刀自身给激活行加 .is-active（默认开＝沿用真机行为）
+    };
+
+    var scroller = document.getElementById("screen-scroll-list");
+    var wrap = document.getElementById("group-rows-wrap");
+    var rowsUl = document.getElementById("group-rows");
+    var foldLi = document.querySelector('li[data-cid="GFOLD"]');
+    var titleEl = document.querySelector(".rn-canvas .canvas-title");
+    // 面板节点引用必须**缓存**：一旦被 removeChild 脱离文档，getElementById 就再也找不到它
+    var PANEL_NODES = {
+      canvas: document.getElementById("panel-canvas-col"),
+      page: document.getElementById("panel-page-col"),
+      layer: document.getElementById("panel-layer-col")
+    };
+
+    // 面板归属：按**缓存的节点引用**（PANEL_NODES）用 contains 判定，而非按容器选择器 ——
+    // 这样锚点被改版换名（__mock.setAnchorRenamed）后仍能正确判归属，断言不受影响。
+    function panelOf(el) {
+      if (!el) return "orphan";
+      for (var k in PANEL_NODES) {
+        var box = PANEL_NODES[k];
+        if (box && (box === el || box.contains(el))) return k;
+      }
+      return "orphan";
+    }
+
+    function rowHtml(it, active) {
+      // state.moldeActive=false 时不给激活行加 .is-active —— 供「选中态只能由我方 md-rt-located
+      // 提供」的对抗性用例（E3）使用，模拟「墨刀自身没把选中态做掉」的场景。
+      var act = (active && state.moldeActive) ? " is-active" : "";
+      return '<li class="rn-content-item" data-cid="' + it.cid + '" data-qa="canvas-' + it.cid +
+             '" data-qa-panel="canvas">' +
+             '<div class="rn-list-item page' + act +
+             '" data-cid="' + it.cid + '" data-interactive-target-type="page">' +
+             it.name + "</div></li>";
+    }
+
+    // 分组行渲染：
+    //   open=false → **全部行常驻 DOM**，仅外层 .canvas-sortable-list 被隐藏（收缩折叠）
+    //   open=true  → 只渲染视口附近的若干行（模拟墨刀长列表按需渲染）
+    function renderGroup() {
+      foldLi.setAttribute("aria-expanded", state.open ? "true" : "false");
+      var foldInner = foldLi.querySelector("div.rn-list-item.folder");
+      if (foldInner) {
+        foldInner.textContent = "历史画布（分组）" + (state.open ? "（展开）" : "（折叠）");
+      }
+      if (!state.open) {
+        wrap.style.display = "none";
+        var all = "";
+        for (var a = 0; a < GROUP.length; a++) all += rowHtml(GROUP[a], GROUP[a].cid === state.active);
+        rowsUl.innerHTML = all;
+        return;
+      }
+      wrap.style.display = "";
+      if (state.fullRender) {
+        // 全量渲染（v1.0.18 · BUG-0014）：分组展开时**保留全部行在 DOM**，滚出可见区的行
+        // 只被 overflow 裁掉（不被卸载）—— 复现「行仍在 DOM、只是不在可视区」的形态。
+        var allf = "";
+        for (var b = 0; b < GROUP.length; b++) allf += rowHtml(GROUP[b], GROUP[b].cid === state.active);
+        rowsUl.innerHTML = allf;
+        return;
+      }
+      var top = scroller.scrollTop - TOP_H;
+      var vh = scroller.clientHeight || 420;
+      var first = Math.max(0, Math.floor(top / ROW_H) - 1);
+      var last = Math.min(N - 1, first + Math.ceil(vh / ROW_H) + 2);
+      var html = "";
+      if (first > 0) html += '<div class="vspacer" style="height:' + (first * ROW_H) + 'px"></div>';
+      for (var i = first; i <= last; i++) {
+        html += rowHtml(GROUP[i], GROUP[i].cid === state.active);
+      }
+      var tail = N - 1 - last;
+      if (tail > 0) html += '<div class="vspacer" style="height:' + (tail * ROW_H) + 'px"></div>';
+      rowsUl.innerHTML = html;
+    }
+
+    scroller.addEventListener("scroll", function () {
+      if (state.open) renderGroup();
+    });
+
+    // 点击：记录流水；分组标题行 = 展开/折叠；画布行 = 切换画布（重渲染）
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var li = t.closest("li.rn-content-item[data-cid]");
+      if (!li) return;
+      var cid = li.getAttribute("data-cid");
+      var name = (li.textContent || "").replace(/\s+/g, " ").trim();
+      state.clicks.push({ cid: cid, name: name, place: (t === li ? "li" : "inner"), panel: panelOf(li) });
+      if (cid === "GFOLD") {                 // 分组标题行 → 展开 / 折叠
+        state.open = !state.open;
+        renderGroup();
+        return;
+      }
+      state.active = cid;
+      titleEl.textContent = name.indexOf("（当前）") >= 0 ? name : name;
+      // v1.0.18（BUG-0014）：模拟切换后墨刀重渲染左栏并把滚动容器 scrollTop 归零
+      // （含重建行节点）—— 这正是「点标签后列表刷新回到顶部」的真机现象。
+      if (state.resetOnSwitch) scroller.scrollTop = 0;
+      renderGroup();
+    }, false);
+
+    window.__mock = {
+      state: state,
+      render: renderGroup,
+      setGroupOpen: function (v) { state.open = !!v; renderGroup(); },
+      isGroupOpen: function () { return state.open; },
+      rows: function () { return GROUP.slice(); },
+      scrollToCid: function (cid) {
+        var idx = -1;
+        for (var i = 0; i < GROUP.length; i++) if (GROUP[i].cid === cid) idx = i;
+        if (idx < 0) return false;
+        scroller.scrollTop = Math.max(0, TOP_H + (idx - 1) * ROW_H);
+        renderGroup();
+        return true;
+      },
+      scrollerTop: function () { return scroller.scrollTop; },
+      scrollerMax: function () { return Math.max(0, scroller.scrollHeight - scroller.clientHeight); },
+      inDom: function (cid) { return !!document.querySelector('[data-cid="' + cid + '"]'); },
+      isVisible: function (cid) {
+        var els = document.querySelectorAll('[data-cid="' + cid + '"]');
+        for (var i = 0; i < els.length; i++) {
+          if (els[i].getClientRects().length && panelOf(els[i]) === "canvas") return true;
+        }
+        return false;
+      },
+      clickLog: function () { return state.clicks.slice(); },
+      resetClicks: function () { state.clicks.length = 0; },
+      setActive: function (cid) { state.active = cid; renderGroup(); },
+      title: function () { return titleEl.textContent; },
+      setTitle: function (t) { titleEl.textContent = t; },
+      domCount: function () {
+        return document.querySelectorAll("li.rn-content-item[data-cid]").length;
+      },
+      panels: function () {
+        return {
+          canvas: !!(PANEL_NODES.canvas && PANEL_NODES.canvas.parentNode),
+          page: !!(PANEL_NODES.page && PANEL_NODES.page.parentNode),
+          layer: !!(PANEL_NODES.layer && PANEL_NODES.layer.parentNode)
+        };
+      },
+      /** 卸载 / 恢复左栏列（模拟墨刀 nav 互斥切换会增删面板容器）。
+       *  注意用缓存的节点引用，不能 getElementById —— 脱离文档后 id 查询会返回 null。 */
+      setPanels: function (opts) {
+        ["canvas", "page", "layer"].forEach(function (k) {
+          var box = PANEL_NODES[k];
+          if (!box) return;
+          if (opts && opts[k] === false) {
+            if (box.parentNode) box.parentNode.removeChild(box);
+          } else if (!box.parentNode) {
+            document.querySelector(".rn-sidebar").appendChild(box);
+          }
+        });
+      },
+      /** 分组行外层是否被 sortable 列表容器包住（真机在**分组 / 需要滚动**时才复用该
+       *  组件；短列表直接挂在画布列下）。用于把「建标签」与「定位」两种状态分开验证。 */
+      setWrapped: function (v) {
+        state.wrapped = !!v;
+        wrap.className = state.wrapped ? "canvas-sortable-list" : "canvas-group-wrap";
+      },
+      isWrapped: function () { return state.wrapped; },
+      /** 锚点改名模式（v1.0.18 新增）：模拟墨刀改版把「画布」列的容器 id/class 换掉
+       *  （#screen-scroll-list → #screen-scroll-list-v2，.screen-list-container →
+       *  .screen-panel），使 recent-tabs-core.js 里**没有任何已知画布锚点**匹配，
+       *  而真画布行依旧存在（且仍可被 sortable 容器包住）。
+       *  用于锁定 BUG-0013：定位**不得**依赖容器锚点识别结果。
+       *  默认关闭，不影响既有用例。 */
+      setAnchorRenamed: function (v) {
+        state.anchorRenamed = !!v;
+        var box = document.getElementById("canvas-col-container");
+        if (state.anchorRenamed) {
+          scroller.id = "screen-scroll-list-v2";
+          if (box) box.className = "screen-panel";
+        } else {
+          scroller.id = "screen-scroll-list";
+          if (box) box.className = "screen-list-container";
+        }
+      },
+      isAnchorRenamed: function () { return state.anchorRenamed; },
+
+      // ===== v1.0.18（BUG-0014）新增：全量渲染 / 切换复位 / 滚动可视判定 / 选中态 =====
+      /** 全量渲染开关：开 → 分组展开时**所有行常驻 DOM**（滚出可见区只被 overflow 裁掉）；
+       *  关 → 沿用虚拟渲染（滚出视口的行不在 DOM）。默认关，不影响既有 C/D 用例。 */
+      setFullRender: function (v) { state.fullRender = !!v; renderGroup(); },
+      isFullRender: function () { return state.fullRender; },
+      /** 切换复位开关：开 → 每次切换画布后重渲染左栏并把滚动容器 scrollTop 归零
+       *  （复现真机「点标签后列表刷新回到顶部」）。默认关。 */
+      setResetOnSwitch: function (v) { state.resetOnSwitch = !!v; },
+      isResetOnSwitch: function () { return state.resetOnSwitch; },
+      /** 墨刀自身是否给激活行加 .is-active（默认开）。关掉后「左栏选中态」只能由
+       *  我方 md-rt-located 提供 —— 供 E3 做对抗性断言（防止墨刀自身标记把用例带过）。 */
+      setMoldeActive: function (v) { state.moldeActive = !!v; renderGroup(); },
+      isMoldeActive: function () { return state.moldeActive; },
+      /** 目标行是否落在画布列滚动容器的**可视矩形**内（与核心 isRowInScroller 同口径：
+       *  上下各 4px 容差；用缓存的 scroller 引用，锚点改名后仍有效）。 */
+      isRowInScroller: function (cid) {
+        var row = null;
+        var els = document.querySelectorAll('.rn-content-item[data-cid="' + cid + '"]');
+        for (var i = 0; i < els.length; i++) {
+          if (panelOf(els[i]) === "canvas") { row = els[i]; break; }
+        }
+        if (!row) return false;
+        var r = row.getBoundingClientRect();
+        var c = scroller.getBoundingClientRect();
+        var TOL = 4;
+        return r.top >= c.top - TOL && r.bottom <= c.bottom + TOL;
+      },
+      /** 左栏「带选中类的行」的 cid：命中墨刀自身激活类（.active/.is-active/.is-selected/
+       *  .selected/.current/[aria-selected="true"]）或我方标记 .md-rt-located 的画布列行。
+       *  只看**行自身**与它的**直接内层行项**（`> div.rn-list-item`），不看任意后代 ——
+       *  否则分组标题行（folder，包住整组行的容器）会因后代带激活类而被误判为选中行。
+       *  找不到返回 null。 */
+      activeRowCid: function () {
+        var sel = ".active,.is-active,.is-selected,.selected,.current," +
+                  "[aria-selected='true'],.md-rt-located";
+        var lis = document.querySelectorAll('.rn-content-item[data-cid]');
+        for (var i = 0; i < lis.length; i++) {
+          var li = lis[i];
+          if (panelOf(li) !== "canvas") continue;
+          var inner = null;
+          try { inner = li.querySelector(':scope > .rn-list-item'); } catch (e) { inner = li.querySelector('.rn-list-item'); }
+          var cands = [li, inner];
+          for (var c = 0; c < cands.length; c++) {
+            var el = cands[c];
+            if (!el || !el.classList) continue;
+            try { if (el.matches(sel)) return li.getAttribute("data-cid"); } catch (e2) {}
+          }
+        }
+        return null;
+      }
+    };
+
+    renderGroup();
+  })();
+  </script>
+</body>
+</html>

@@ -2,6 +2,9 @@
 
 基于 Playwright（Python，受管 venv）的 `recent-tabs-core.js` 核心逻辑 + `tabbar.js` 组件自动化测试。
 
+> 缺陷台账与改动纪律见仓库根目录 [`CHANGELOG.md`](../CHANGELOG.md)。
+> 发版前请跑 `python scripts/regress.py`（一致性 + 全量 + A/B 对照门禁）。
+
 ## 运行环境
 
 - Python venv：`C:\Users\15020\.workbuddy\binaries\python\envs\default`
@@ -11,6 +14,9 @@
 ## 运行
 
 ```bash
+# 全量回归门禁（一致性 + 全量 + A/B，推荐）
+python scripts/regress.py
+
 # 核心逻辑（recent-tabs-core.js）
 python tests/test_core_logic.py
 
@@ -22,7 +28,26 @@ python tests/test_regression_tab_autoclose.py
 
 # v1.0.17「只有画布面板能建标签」回归（页面/画布/图层三面板夹具）
 python tests/test_canvas_panel_only.py
+
+# v1.0.18「点标签提示未找到画布」+「点标签后定位到列表位置并保持」回归
+#   （折叠 / 滚动 / 全量渲染 / 切换复位 / 锚点改名夹具，支持 --core 做 A/B；C/D/E 三组）
+python tests/test_relocate_collapsed.py                             # C0-C5 + D1-D4 + E1-E5 必须全绿
+# ⚠ v1.0.17 的提交号是 5f08557（本地 tag v1.0.17 亦指向它）；引历史版本一律用提交号更稳：
+#   git show 5f08557:recent-tabs-core.js > _core17.js
+python tests/test_relocate_collapsed.py --core _core17.js           # 必须复现用户原话（D1/D2 失败）
+#   git show v1.0.16:recent-tabs-core.js > _core16.js
+python tests/test_relocate_collapsed.py --core _core16.js           # 【回归】组必须全过
+python tests/test_relocate_collapsed.py --carrier desktop           # 用 desktop/ 副本跑 parity
+# ⚠ 旧 1.0.18（即曾临时试装的 1.0.19 包）从未提交（无 tag / 无提交号）。要反向对照 BUG-0013，
+#   用脚本生成「被否决实现等价核心」：
+python scripts/mk-core-rejected.py                                  # → _core-rejected.js（已 gitignore）
+python tests/test_relocate_collapsed.py --core _core-rejected.js    # C/D 必须失败
+# BUG-0014 对抗性自证：把当轮修复前的核心备份为 _core-prev.js，E2/E3 在其上必须失败：
+python tests/test_relocate_collapsed.py --core _core-prev.js        # E2/E3 必须失败
 ```
+
+> A/B 对照矩阵已固化在 `tests/ab_expectations.json`，由 `scripts/regress.py` 的 [3/4] 段自动执行
+> （`expect=regression_pass|regression_fail`）。日常不必手敲上面的 `--core`，新增缺陷时在该文件补一条即可。
 
 退出码：`0` 全过，`1` 有失败。失败用例自动在 `tests/artifacts/` 留截图。
 
@@ -37,11 +62,13 @@ python tests/test_canvas_panel_only.py
 | `tests/fixtures/mock-modao-design.html` | 模拟墨刀设计文件页：固定顶栏、`div.rn-list-item[data-cid]` 画布栏（含 `.folder` 排除项、`.is-active` 默认画布）、`.canvas-title`。历史由脚本写 `localStorage` |
 | `tests/fixtures/mock-modao-design-virtual.html` | 模拟**左侧画布栏虚拟滚动**的墨刀设计页：40 页长列表只渲染进入视口的行 + 折叠文件夹「归档」+ 点项后整栏重渲染（模拟 SPA 重绘）。用于复现「标签自动关闭」BUG |
 | `tests/fixtures/mock-modao-design-panels.html` | 模拟墨刀 v22.18 的**「页面 / 画布 / 图层」三面板**左栏（真机 DOM 契约：三面板共用 `li.rn-content-item` / `div.rn-list-item` 且都带 `data-cid`，只能按容器锚点区分）。含与画布同 `data-cid` 的图层节点、空名称画布项、无归属孤立项，`__mock.setPanels()` 可模拟画布/图层 nav 互斥切换 |
+| `tests/fixtures/mock-modao-design-collapsed.html` | 模拟墨刀 v22.18 三面板左栏 + **画布列可收缩折叠 / 滚动虚拟渲染 / 全量渲染 / 切换复位**：分组「历史画布」的 30 个画布行外层被 `div.canvas-sortable-list`（**v1.0.17 黑名单名容器**）包住；`__mock.setGroupOpen()` 折叠/展开、`__mock.setWrapped()` 切换是否被该容器包住、`__mock.setPanels()` 卸载整列、**`__mock.setAnchorRenamed(true)` 把「画布」列容器锚点改版换名**（`#screen-scroll-list`→`#screen-scroll-list-v2`、`.screen-list-container`→`.screen-panel`，使核心无任何已知画布锚点匹配）。v1.0.18（BUG-0014）新增 **`setFullRender(bool)`**（全量渲染：滚出可见区的行保留在 DOM，仅被 overflow 裁掉）、**`setResetOnSwitch(bool)`**（切换后重渲染左栏并把滚动容器 `scrollTop` 归零、含重建行节点）、**`setMoldeActive(bool)`**（是否由墨刀自身给激活行加 `.is-active`）、**`isRowInScroller(cid)`**（行是否落在滚动容器可视矩形内，与核心同口径）、**`activeRowCid()`**（左栏带选中类的行 cid）。用于复现并锁定 BUG-0012 / BUG-0013 的「未找到画布」与 BUG-0014 的「点标签后回到列表顶部」 |
 | `tests/test_canvas_panel_only.py` | v1.0.17「只有画布面板能建标签」回归 14 组 / 114 断言：点页面/图层不建标签、同 cid 图层节点不污染、点画布建标签、连点不重复、空名不建、`.is-active` 收窄、点标签不误点图层、严格模式双向、兼容降级、反向对照（屏蔽面板判定后原 BUG 必复现） |
+| `tests/test_relocate_collapsed.py` | 「点标签提示未找到画布」（BUG-0012/BUG-0013）+「点标签后定位到列表位置并保持 + 左栏选中态」（BUG-0014）回归 **15 组**：C0-C5（折叠不可见 / 滚动未渲染 → 定位并切换；分组行可建标签；不误点图层；画布列卸载不误点其它列）+ **D1-D4（画布列容器锚点被改版换名：行被 sortable 容器包住 / 折叠隐藏 → 仍须定位并切换；带 `layer-item` 的页面/图层列同 cid 节点绝不误点；未知面板里同 cid 的杂散行不得因优先级反转抢占真画布行）** + **E1-E5（全量渲染下目标行滚出可视区 → 点标签必须滚回；切换后重渲染+滚动归零 → 目标行仍须在可视区（锁 BUG-0014 真机现象）；左栏目标行呈选中态且可逆无残留；用户手动滚动不被抢回；全量渲染下不得点到页面/图层列同 cid 行）**。断言按【回归】/【需求】/【保护】分组，支持 `--core` 做三方 A/B |
+| `scripts/dump-canvas-dom.js` | **真机取证脚本**（IIFE、只读、不污染全局）：无新版构建时可直接粘到墨刀设计页 Console，dump 当前 DOM 真相 —— 核心版本 / 各已知锚点选择器命中数 / 所有 `[data-cid]` 行的签名（tag·class·type·layerItem·visible·panel·被拒原因）与完整祖先链（≤8 层）/ 按名字模糊匹配的候选；`console.log(JSON.stringify(...))` + `copy(...)` 便于回贴。用法见 `CHANGELOG.md` v1.0.18 / `dump-canvas-dom.js` 顶部注释 |
 | `tests/test_core_logic.py` | 核心逻辑 10 用例 |
 | `tests/test_tabbar_ui.py` | 组件 1 用例（演示页） |
 | `tests/test_regression_tab_autoclose.py` | 标签自动关闭 BUG 回归 5 用例（虚拟滚动夹具） |
-| `tests/test_canvas_panel_only.py` | 画布面板收窄回归 14 组 / 114 断言（三面板夹具） |
 
 ## 覆盖映射（README.browser.md 自测清单 8 项 + 扩展）
 
@@ -59,6 +86,11 @@ python tests/test_canvas_panel_only.py
 | 10 | 清除已关闭标签 | `test_clear_closed`（扩展消息 `MD_CLEAR_CLOSED` → 恢复 + 清空记录） |
 | 11 | 演示页组件交互 | `test_demo`（渲染/切换/关闭/下拉，复用同一套 `tabbar.js`） |
 | 12 | 浮动模式不遮挡工具栏 | `test_float_toolbar_not_blocked`（v1.0.16 回归：无热区 div、`elementFromPoint` 命中工具栏、工具栏点击可达、悬停工具栏不误弹） |
+| 13 | 折叠/滚动/改版换名下点标签能定位 | `test_relocate_collapsed.py` C1/C2、**D1/D2（BUG-0013）** |
+| 14 | 不误点页面/图层列（含同 cid） | `test_canvas_panel_only.py` T6/T11/T12、`test_relocate_collapsed.py` C4/C5/**D3**/**E5** |
+| 16 | 同 cid 冲突行不得因优先级反转抢占真画布行 | `test_relocate_collapsed.py` **D4**（未知面板杂散行） |
+| 15 | 定位失败不静默删标签 + 可见提示 | `test_relocate_collapsed.py` C5、`test_canvas_panel_only.py` T11 |
+| 17 | 点标签后定位到画布在左栏的位置并保持 + 左栏选中态 | `test_relocate_collapsed.py` **E1/E2（定位并保持）、E3（选中态）、E4（手动滚动不被抢回）** |
 
 ## 测试中发现的行为说明（非缺陷，已据实断言）
 

@@ -15,3 +15,21 @@ tests/__pycache__/
 tests/artifacts/
 # 代理/工具内部数据（非项目源码，勿提交）
 .workbuddy/
+# 工具探针临时产物
+.wb_ls_*.txt
+# 反向对照时临时生成的历史版本核心（scripts/mk-core-rejected.py 的输出；含不带下划线的 core1x.js 变体）
+_core*.js
+core1*.js
+# 取证 / QA 运行的临时产物（脚本本身保留在 tests/ 与 scripts/，只忽略其输出）
+_fx/
+_qa_*.txt
+_qa_*.json
+_probe_*_selftest.txt
+_logged_*.json
+tests/_qa_*.txt
+tests/_qa_*.json
+# QA 取证时抽出的历史版本核心 / 时代 tabbar / 埋点插桩核心（可随时用 git show 重新生成）
+tests/_qa_old_*
+tests/_qa_bug0015_core_inst.js
+# 一次性取证脚本（下划线前缀 = 临时，不入库）
+scripts/_*.py

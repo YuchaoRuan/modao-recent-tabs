@@ -1,4 +1,88 @@
 /* =========================================================================
+ * v1.0.18（本轮 · BUG-0014）修复「点标签能切换画布，但左栏列表刷新了一下回到顶部」：
+ *         现象（用户原话）：「点标签能切换但不定位到画布在画布列表的位置」，追问确认
+ *         「刷新了一下回到了列表顶部」；期望「滚动 + 设为左栏选中态」。
+ *         根因：原实现只在**点击前**滚一次（scrollIntoView），而墨刀切换画布时会重渲染
+ *         左栏并把滚动容器 scrollTop **复位**（含重建行节点）→ 刚滚到位立刻被冲掉 →
+ *         列表回到顶部；且 isRowVisible 只判「是否在渲染树」，不判「是否在滚动容器可视
+ *         区内」——滚出视野的行照样算「可见」→ 定位链误以为已到位。
+ *         修复（只动「定位/滚动显示」，不碰建标签与定位接受规则）：
+ *           · 新增 isRowInScroller(el, sc)：用 getBoundingClientRect 与滚动容器客户区比较，
+ *             判行是否落在**可视矩形**内（上下各 4px 容差）；与只判渲染树的 isRowVisible
+ *             语义区分（二者互补，注释写清差异）。
+ *           · 新增 getRowScroller(el)：向上找最近的 overflowY∈{auto,scroll} 且可滚动的祖先，
+ *             取不到退回 getCanvasScrollContainer()。
+ *           · getCanvasScrollContainer 的候选**起点不止第一个画布行**：取不到行时把「画布列
+ *             容器本身」也纳入起点向上找滚动宿主，避免一屏都没渲染出行时直接返回 null、
+ *             整条滚动兜底被跳过；绝不用页面列的行当起点而滚错容器。
+ *           · 新增 scrollRowIntoView(id, el, center)：按 id 重新定位行 → rect 差算 rowTop
+ *             → 设 scrollTop（clamp 到 [0, scrollHeight-clientHeight]）→ scrollIntoView
+ *             (nearest) 兜底。
+ *           · 新增 keepRowVisible(id, ms)：点击后在 rAF/+60/+180/+400/+800ms 复查，被复位就
+ *             重新滚、行被重建就重新定位；**用户一旦手动滚动（wheel/keydown/pointerdown/
+ *             touchstart）立即放弃**并解绑全部监听；token 与 revealToken 联动，destroy 清干。
+ *           · activateCanvas 改为：点击前滚一次（完整可见）→ 点击 → 点击后再滚并居中 →
+ *             keepRowVisible 复查 → 落左栏选中态（md-rt-located；墨刀自身已有激活类则不叠加）。
+ *         回归用例：tests/test_relocate_collapsed.py（E1/E2 锁定 + E3/E4 需求/保护）。
+ * v1.0.18（定位加固）修复「点标签提示未找到画布」在真机仍未修复（用户 2026-09-16 复验）：
+ *         现象：与上一版完全相同的「未找到画布，请先在左侧画布栏展开或滚动到它」
+ *         提示；真机 F12 日志行号与上一版源码逐行吻合
+ *         （recent-tabs-core.js:742 / :744）→ 已排除「改动没生效」。
+ *         根因（确凿死亡分支）：findCanvasEl 用 canvasPanelPresent() 门控候选；而
+ *         canvasPanelPresent 的「用是否存在画布级行兜底」分支是**死代码** —— 它靠
+ *         classifyItem(els[i]) === "canvas" 判存在，但 classifyItem 只在
+ *         insideAny(el, p.canvas) 为真时才可能返回 "canvas"；当 p.canvas 为空时它
+ *         恒不返回 "canvas"。于是「画布」列容器锚点一旦被墨刀改版换名，
+ *         canvasPanelPresent 恒为 false → preferCanvas 恒为 false → 所有被判为
+ *         canvasWrapped / page 的候选行被无条件跳过 → 真画布行（恰被 sortable
+ *         容器包住）永远查不到 → 弹「未找到画布」。
+ *         修复（只放宽「定位」，绝不动「建标签」判据）：
+ *           · findCanvasEl 只允许因**两个**理由拒绝候选：① 落在图层树 / 状态页 /
+ *             交互树容器内；② 行项带 layer-item 类名（真机取证：左栏下部「页面」列
+ *             与「图层」列的行项都带 layer-item，唯左栏上部「画布」列的行项是
+ *             div.rn-list-item.page，不带 layer-item）。不再由任何容器识别结果
+ *             （canvasPanelPresent / 黑名单）压制候选 → 定位对**真画布行不缩水**
+ *             （凡 v1.0.16 能命中并点击的真画布行，本版也命中；唯一收窄是永不点
+ *             v1.0.16 会误命中的页面/图层列行）。
+ *           · 优先级排序 canvas > canvasWrapped > page > other：只要容器可识别，
+ *             必优先选中「画布」列那一行；「无归属」的 other 排最低，避免未知面板里
+ *             同 cid 的杂散行抢占真画布行（QA 复核 BUG-0013 时发现的优先级反转）。
+ *           · canvasPanelPresent 降级为**仅供诊断**，并修正其死亡兜底分支为诚实实现
+ *             （不再把死代码留在原地误导后人）。
+ *           · isCanvasPanelItem（建标签判据）**保持不变**（BUG-0011 教训：把判据收窄
+ *             成白名单会把真画布点击一起拒掉，比原 BUG 更严重）。
+ *           · 定位失败诊断大幅加固：对每个同 cid 元素输出
+ *             tag / class / data-interactive-target-type / layerItem / visible /
+ *             完整祖先链（最多 8 层）/ 被拒原因；另输出各锚点命中数与 data-cid 命中总数。
+ *         回归用例：tests/test_relocate_collapsed.py（D1/D2 锁定 + D3/D4 保护；A/B 见 CHANGELOG.md）。
+ * v1.0.18（回归修复）修复「点标签提示未找到画布」回归（用户 2026-09-16 上报）：
+ *         现象：曾经打开过的画布仍在左侧上部「画布」列里，只是被**收缩折叠**
+ *         不可见、或因**滚动不在可见区域**；此时点它的标签 → 提示「未找到画布，
+ *         请先在左侧画布栏展开或滚动到它，再点击标签切换」，画布切不过去。
+ *         v1.0.16 及更早正常，v1.0.17 引入。
+ *         根因（由 v1.0.16→v1.0.17 源码差异推导，不靠记忆）：v1.0.17 把「下部
+ *         页面列」的容器类名（#canvas-scroll-list / .canvas-scroll-list /
+ *         .canvas-sortable-list / #mb-enabled-canvas-list）放进了 findCanvasEl
+ *         的**黑名单**，一律拒绝其中的同 cid 行；而真机上「画布」列在**存在分组
+ *         或需要滚动**时，行的外层会被同一个 sortable 列表组件包住 → 类名正好
+ *         命中黑名单 → 行即使在 DOM 里（折叠隐藏）也永远查不到。
+ *         修复（只放宽「定位」，不放宽「建标签」收窄）：
+ *           · 行归属改五分类：canvas（画布列）/ canvasWrapped（画布列内、被黑名单
+ *             名容器包住）/ page（下部页面列）/ layer（图层·状态·交互树）/ other。
+ *           · findCanvasEl(id) 按 LOCATE_PRIORITY（canvas > canvasWrapped > page > other）
+ *             取最优候选，**不做 canvasPanelPresent() 门控**（BUG-0013 已取消：该门控的
+ *             「画布级行兜底」分支是死代码，会把真画布行一并拒掉）；「画布」列整体卸载时，
+ *             靠拒绝理由① inLayerTree ② layerItem 兜底，**绝不点**其它列的节点
+ *             （v1.0.17 成果，T11 锁定，机制见 findCanvasEl 注释）。
+ *             净效果：定位能力回到 v1.0.16，唯一收窄是永不点图层树节点。
+ *           · 命中后若该行被折叠隐藏，自动展开包住它的 aria-expanded="false"
+ *             祖先（最多 2 层、只在画布列容器内）并滚动到可见，再点它切换 ——
+ *             落实「定位到画布所在位置，并显示画布内容」。
+ *           · 仍失败时保留标签 + data-stale + toast，并输出结构化诊断（面板快照 /
+ *             候选行 / 折叠开关 / 搜索框 / 历史 id），供真机 Console 一键定位。
+ *         建标签判据不变（仍拒绝页面列、图层树、状态页、交互树），另补：画布列内
+ *         被黑名单名容器包住的分组行同样可建标签（否则折叠分组里的画布点了不长标签）。
+ *         回归用例：tests/test_relocate_collapsed.py（A/B 对照命令见 CHANGELOG.md）。
  * v1.0.17 画布识别收窄：墨刀 v22.18 起左栏为「页面 / 画布 / 图层」三面板，
  *         三者**共用**通用树组件类名 div.rn-list-item / li.rn-content-item
  *         （且 layer-item 在画布与图层面板都会出现，带 data-cid 的页面项
@@ -49,7 +133,7 @@
     var TOPBAR_H = 44;
     // 版本号会写到 #md-recent-tabs-root[data-md-version]，便于真机在 Console 直接
     // 核对当前加载的是哪一版（排查「改了没生效」类问题时先看这个）。
-    var MD_VERSION = "1.0.17";
+    var MD_VERSION = "1.0.18";
 
     // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
     // 同时存在 div.rn-list-item[data-cid] 与 li.rn-content-item[data-cid] 两种形态，
@@ -79,16 +163,9 @@
       ".screen-list-container",
       "#mobile-screen-tree"
     ];
-    // 黑名单：命中任一祖先 → **一定不是**画布项。
-    // 覆盖下部「页面」列（#mb-enabled-canvas-list 等）、「图层」列、状态页与交互树。
-    // 注意：**不能**把页面树自身的容器（#mobile-page-item / ul.child-screens 等）放进
-    // 黑名单 —— 上部「画布」列的条目正是它们的子节点。
-    var NON_CANVAS_PANEL_SELECTORS = [
-      // —— 下部「页面」列（画板列表，条目名带序号）——
-      "#mb-enabled-canvas-list",
-      "#canvas-scroll-list",
-      ".canvas-scroll-list",
-      ".canvas-sortable-list",
+    // 黑名单 A（**最强**）：图层树 / 状态页 / 交互树 —— 命中即「一定不是画布」，
+    // 建标签与定位**任何情况下都拒绝**（点它会点到图层节点上，属切错）。
+    var LAYER_TREE_PANEL_SELECTORS = [
       // —— 下部「图层」列（widget 树）——
       "#mb-enabled-layer-list",
       "#layer-scroll-list",
@@ -100,6 +177,19 @@
       "#interaction-tree-container",
       "#interaction-tree-list"
     ];
+    // 黑名单 B：下部「页面」列（画板列表，条目名带序号）的容器类名。
+    // ⚠ v1.0.18 教训：这些类名**同时**会被「画布」列在分组 / 滚动场景复用
+    // （同一套 sortable 列表组件），故它们只能作「默认拒绝」依据，不能无条件拒绝 ——
+    // 若目标行同时也落在**画布列容器内**，应改判为画布行（见 classifyItem）。
+    var PAGE_LIST_PANEL_SELECTORS = [
+      "#mb-enabled-canvas-list",
+      "#canvas-scroll-list",
+      ".canvas-scroll-list",
+      ".canvas-sortable-list"
+    ];
+    // 合计黑名单：仅用于「是否落在非画布容器内」的粗判（诊断 / 兼容既有调用点）
+    var NON_CANVAS_PANEL_SELECTORS =
+      LAYER_TREE_PANEL_SELECTORS.concat(PAGE_LIST_PANEL_SELECTORS);
     // 严格模式判定锚点：任一左栏列表存在 → 判定为墨刀设计页（旧版/简化 DOM 时走兼容降级）
     var STRICT_PANEL_SELECTORS = [
       "#screen-scroll-list",
@@ -129,20 +219,6 @@
       return false;
     }
 
-    // 画布项判定：**只做排除**（黑名单），不再要求「必须命中画布面板白名单」。
-    // 教训（2026-09-11 真机回归）：白名单把「画布项长什么样」硬编码成了容器 id，
-    // 只要墨刀的画布面板容器与取证版本不完全一致（改版 / 另一套布局 / 挂载时机），
-    // 真正的画布点击会被一起拒绝 —— 用户实测「点画布不长标签」，退化比原 BUG 更严重。
-    // 而 1.0.16 之所以可用，正是因为它只做「点谁都能建标签」。故本版取两者之长：
-    //   建标签条件 = 命中通用树项 **且不在** 页面 / 图层 / 状态页 / 交互树内。
-    // 不对称风险取舍：白名单失效=画布点击被拒（用户不可用）；黑名单失效=退回 1.0.16
-    // 的宽松行为（点页面/图层也建标签，可由真机自检脚本立刻发现）——后者可接受。
-    // strict 参数保留仅为兼容既有调用点，判定不再依赖它。
-    function isCanvasPanelItem(el, strict) {
-      if (!el) return false;
-      return !matchAncestor(el, NON_CANVAS_PANEL_SELECTORS);
-    }
-
     // 收集当前文档里真实存在的面板容器（nav 在画布/图层间互斥切换会让容器增删，
     // 故每次实时计算，不缓存为一次性常量）。
     function collectPanels(selectors) {
@@ -158,11 +234,15 @@
       return out;
     }
 
-    // 当前面板快照：canvas=画布面板容器，non=非画布面板容器（页面/图层/状态/交互树）
+    // 当前面板快照：
+    //   canvas    画布列容器（#screen-scroll-list 等）
+    //   layerTree 图层树 / 状态页 / 交互树容器（永不是画布）
+    //   pageList  下部「页面」列容器（默认拒绝，但画布列分组/滚动时可能复用同类名）
     function currentPanels() {
       return {
         canvas: collectPanels(CANVAS_PANEL_SELECTORS),
-        non: collectPanels(NON_CANVAS_PANEL_SELECTORS)
+        layerTree: collectPanels(LAYER_TREE_PANEL_SELECTORS),
+        pageList: collectPanels(PAGE_LIST_PANEL_SELECTORS)
       };
     }
 
@@ -175,29 +255,127 @@
       return false;
     }
 
-    // 遍历「非页面 / 非图层」面板里的画布项（已跳过 folder）。
-    // 与 isCanvasPanelItem 同一判据（只排除黑名单容器），保证批量扫描与点击判定一致。
+    // 行项是否带 `layer-item` 类名 —— v1.0.18 定位路径的**独立于容器锚点**的判据。
+    // 真机取证（v22.18.18-op22603.1，见 tests/fixtures/mock-modao-design-panels.html）：
+    //   左栏上部「画布」列行项  = div.rn-list-item.page[data-cid]
+    //                             + data-interactive-target-type="page"  → **不带** layer-item
+    //   左栏下部「页面」列行项  = div.rn-list-item.layer-item.interactive-target-hotspot
+    //                             + data-interactive-target-type="canvasList" → **带** layer-item
+    //   左栏「图层」列行项      = div.rn-list-item.layer-item[data-cid] → **带** layer-item
+    // 所以凭 `layer-item` 这一个类名即可把「真画布行」与「页面列 / 图层列行」分开，
+    // 完全不依赖容器锚点 —— 这正是锚点被改版换名时仍能定位的依据。
+    // 被测元素既可能是内层 div.rn-list-item，也可能是外层 li.rn-content-item（两种都带
+    // data-cid，均会被 CANVAS_ITEM_SELECTOR 命中）；对 li 形态需下钻到它的**本行**行项。
+    function rowHasLayerItem(el) {
+      if (!el) return false;
+      if (el.classList && el.classList.contains("layer-item")) return true;
+      if (!el.querySelector) return false;
+      var inner = null;
+      try { inner = el.querySelector(":scope > .rn-list-item"); } catch (e) { inner = null; }
+      if (!inner) inner = el.querySelector(".rn-list-item");   // 兼容：li 内仅一个行项
+      return !!(inner && inner.classList && inner.classList.contains("layer-item"));
+    }
+
+    // 定位路径的唯一拒绝判据（v1.0.18）：候选行是否**必须**被拒。
+    // 只允许两个理由（见 findCanvasEl 注释）：
+    //   "inLayerTree" 落在图层树 / 状态页 / 交互树容器内（v1.0.17 成果，T11/C4/C5 锁定）
+    //   "layerItem"   行项带 layer-item 类名（下部「页面」列 / 「图层」列的行，不是画布）
+    // 返回 "" 表示该候选可接受。诊断输出复用本函数。
+    function rejectReason(el, panels) {
+      var p = panels || currentPanels();
+      if (insideAny(el, p.layerTree)) return "inLayerTree";
+      if (rowHasLayerItem(el)) return "layerItem";
+      return "";
+    }
+
+    // 行归属分类（v1.0.18，建标签与定位共用同一判据）：
+    //   "layer"         图层树 / 状态页 / 交互树 —— 任何情况下都不是画布，永不点
+    //   "canvas"        画布列内、且没被「页面列类名」的容器包住 → 最可信
+    //   "canvasWrapped" 画布列内、但外层被黑名单名容器（sortable 列表）包住
+    //                   → 折叠分组 / 滚动虚拟化的真实形态（v1.0.17 回归的根因）
+    //   "page"          下部「页面」列 → 不是画布，默认拒绝
+    //   "other"         无归属的通用树项 → 沿用 v1.0.17「只排除」语义，接受
+    // 判据顺序把 layer 放最前：即使画布列容器与图层树嵌套，也绝不把图层节点当画布。
+    function classifyItem(el, panels) {
+      if (!el) return "other";
+      var p = panels || currentPanels();
+      if (insideAny(el, p.layerTree)) return "layer";
+      var inCanvas = insideAny(el, p.canvas);
+      if (inCanvas) return insideAny(el, p.pageList) ? "canvasWrapped" : "canvas";
+      if (insideAny(el, p.pageList)) return "page";
+      return "other";
+    }
+
+    // 「画布」列当前是否存在于文档中。
+    // ⚠ v1.0.18：本函数**仅供诊断**（写入 diagnoseLocateFailure 的快照），定位路径
+    // （findCanvasEl）**已不再**依赖它。历史教训（BUG-0012 / BUG-0013）：曾用它门控候选，
+    // 而它自身在「锚点被改版换名」的 DOM 下恒为 false → 把真画布行一并拒掉。
+    // 诚实实现（替换掉原来的死亡兜底分支）：命中任一「画布」列容器锚点，或存在
+    // 一个「不在图层树 / 状态 / 交互树容器内、不在下部『页面』列内、且行项不带
+    // layer-item」的行 —— 即符合真画布行签名的行 —— 就认为画布列还在。
+    function canvasPanelPresent(panels) {
+      var p = panels || currentPanels();
+      if (p.canvas.length > 0) return true;
+      var els = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
+      for (var i = 0; i < els.length; i++) {
+        if (insideAny(els[i], p.pageList)) continue;   // 下部「页面」列的行不算「画布列存在」
+        if (rejectReason(els[i], p) !== "") continue;  // 图层树 / 带 layer-item 的行不算
+        return true;
+      }
+      return false;
+    }
+
+    // 画布项判定（建标签入口）：**只做排除**，不再要求「必须命中画布面板白名单」。
+    // 教训（2026-09-11 真机回归）：白名单把「画布项长什么样」硬编码成容器 id，
+    // 一旦墨刀改版 / 挂载时机不同，真正的画布点击会被一起拒掉（真机实测：
+    // 「点画布不长标签」），比原 BUG 更严重；黑名单失效最坏只退回 1.0.16 的宽松
+    // 行为（点页面/图层也建标签），且能被真机自检脚本立刻发现。
+    // v1.0.18 追加：画布列内**被黑名单名容器包住**的分组行（canvasWrapped）同样接受
+    // —— 否则折叠分组里的画布点了不长标签，与本次回归同源。
+    // 仍然**不**接受 "page"（下部页面列）/"layer"（图层树/状态页/交互树）。
+    // strict 参数保留仅为兼容既有调用点，判定不再依赖它。
+    function isCanvasPanelItem(el, strict) {
+      var k = classifyItem(el);
+      return k === "canvas" || k === "canvasWrapped" || k === "other";
+    }
+
+    // 遍历「可建标签」的画布项（已跳过 folder）。
+    // 与 isCanvasPanelItem 同一判据，保证批量扫描与点击判定一致。
     // 性能：真机「页面」面板常驻 4400+ 节点，逐项做 closest 祖先匹配代价高，这里改成
-    // 「先取出黑名单容器，再用 contains 判归属」（含 4400 项的页面面板只需第 1 次
-    // contains 即命中排除），且只做一次 querySelectorAll 取项，不产生重复回调。
+    // 「先取出容器集合，再用 contains 判归属」，且只做一次 querySelectorAll 取项。
     function eachCanvasItem(fn, panels) {
       var p = panels || currentPanels();
       var els = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
       for (var i = 0; i < els.length; i++) {
         var el = els[i];
         if (el.classList && el.classList.contains("folder")) continue;
-        if (insideAny(el, p.non)) continue;   // 页面 / 图层 / 状态页 / 交互树 → 排除
+        var k = classifyItem(el, p);
+        if (k === "page" || k === "layer") continue;   // 页面列 / 图层·状态·交互树 → 排除
         fn(el);
       }
     }
 
-    // 第一个可作滚动作业的树项（跳过文件夹与非画布面板）。用于定位滚动宿主；
-    // 取不到画布项时退回任意树项，保证「滚动扫描兜底」仍尽力而为
-    // （滚动本身不会建标签，findCanvasEl 仍按面板判定，不会误点到图层/页面项）。
+    // 第一个可作滚动作业的树项（跳过文件夹与页面/图层列项）。用于定位滚动宿主。
+    // 优先级：画布列行 → 画布列内被包住的行 → 无归属行 → 任意树项。
+    // v1.0.18：与 findCanvasEl 用同一套拒绝规则（rejectReason），锚点被改版换名时
+    // 也能选中真画布行作为滚动宿主。注意「滚动」本身不会建标签，且 findCanvasEl 仍按
+    // 归属判定，故退回任意树项不会误点。
     function firstCanvasItem(panels) {
-      var found = null;
-      eachCanvasItem(function (el) { if (!found) found = el; }, panels);
-      return found || document.querySelector(CANVAS_ITEM_SELECTOR);
+      var p = panels || currentPanels();
+      var els = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
+      var wrapped = null, other = null;
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.classList && el.classList.contains("folder")) continue;
+        if (rejectReason(el, p) !== "") continue;   // 图层树 / 带 layer-item 的行：不是画布
+        var k = classifyItem(el, p);
+        if (k === "canvas") return el;
+        if (k === "canvasWrapped" && !wrapped) wrapped = el;
+        else if (k === "other" && !other) other = el;
+      }
+      if (wrapped) return wrapped;
+      if (other) return other;
+      return document.querySelector(CANVAS_ITEM_SELECTOR);
     }
 
     var cid = null;
@@ -266,7 +444,9 @@
         persistClosed();
       }
       if (!name) {
-        var el = findCanvasEl(id);
+        // v1.0.18：连带兜底候选一起找（折叠分组 / 滚动未渲染时严格候选可能为空），
+        // 否则标签会因取不到名字而不落库。
+        var el = findCanvasEl(id, true);
         if (el) name = readName(el);
       }
       if (!name) return false;
@@ -283,30 +463,69 @@
 
     // 定位左侧画布项 DOM：遍历所有已知形态，找不到返回 null。
     // 注意：找不到 **不等于** 画布被删除 —— 左侧栏可能是虚拟滚动（未进入视口不渲染）、
-    // 文件夹折叠，或正处于 SPA 重绘瞬间。调用方必须按「暂时不可见」处理（见 onSwitch）。
-    // v1.0.17：同名形态在「页面 / 画布 / 图层」面板里可能同时存在，必须按面板锚点
-    // 过滤，否则点标签会点到页面或图层里的同名节点（切错 / 建无效标签）。
-    function findCanvasEl(id) {
+    // 收缩折叠隐藏，或正处于 SPA 重绘瞬间。调用方必须按「暂时不可见」处理（见 onSwitch）。
+    // v1.0.17：同名形态在「页面 / 画布 / 图层」面板里可能同时存在，必须按面板归属过滤，
+    //          否则点标签会点到页面或图层里的同名节点（切错 / 建无效标签）。
+    // v1.0.18：**只允许两个拒绝理由**，不再由任何容器识别结果（canvasPanelPresent /
+    // 黑名单）压制候选 —— 那正是 BUG-0012/BUG-0013 的根因：锚点被改版换名时
+    // canvasPanelPresent 恒 false → 真画布行被一并拒掉。
+    //   拒绝① 落在图层树 / 状态页 / 交互树容器内（rejectReason = "inLayerTree"）：
+    //          永不点（v1.0.17 成果，T11/C4/C5 锁定）。
+    //   拒绝② 行项带 layer-item 类名（rejectReason = "layerItem"）：下部「页面」列 /
+    //          「图层」列的行都带它，真画布行不带（真机取证，见 rowHasLayerItem）。
+    // 其余候选全部接受，并按归属**优先级**取最优。关键：只要容器可识别，就必须优先选中
+    // 「画布」列那一行 —— 因此把「无归属」的 other 排到**最低**，防止「未知面板里一条同
+    // cid 的杂散行（无 layer-item、不在任何已知容器内）」抢占真画布行
+    //（QA 复核 BUG-0013 时实测到该优先级反转：旧序 other(2) 会压过 canvasWrapped(3)/page(4)）。
+    //   ① "canvas"        画布列内、未被 sortable 容器包住 → 最可信
+    //   ② "canvasWrapped" 画布列内、被 sortable 容器包住（黑名单名容器）→ 仍是画布列的行
+    //   ③ "page"          下部「页面」列容器内 —— 画布列锚点被改版换名时，被包住的真画布行
+    //                      会落到这里；带 layer-item 的页面列行已在上一步被拒，故此为逐级兜底
+    //   ④ "other"         无归属通用树项 —— 兼容降级（旧 DOM / 无任何锚点）用，可信度最低
+    // 净效果：定位对**真画布行不缩水**（凡 v1.0.16 能命中并点击的真画布行，本版也命中；
+    // 唯一收窄是永不点图层树 / 页面·图层列——那是 v1.0.16 会误命中的行）。
+    // allowFallback 参数保留仅为兼容既有调用点（当前所有调用点都传 true）；本版定位
+    // 不再需要它做门控。
+    var LOCATE_PRIORITY = { canvas: 1, canvasWrapped: 2, page: 3, other: 4 };
+
+    function findCanvasEl(id, allowFallback) {
       if (!id) return null;
       var esc = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(id) : id;
       var p = currentPanels();
+      var best = null, bestRank = 99;
       for (var i = 0; i < CANVAS_BASE_SELECTORS.length; i++) {
         var els = document.querySelectorAll(CANVAS_BASE_SELECTORS[i] + '[data-cid="' + esc + '"]');
         for (var j = 0; j < els.length; j++) {
-          // 与 isCanvasPanelItem 同判据：只排除页面 / 图层 / 状态页 / 交互树内的同名项
-          if (!insideAny(els[j], p.non)) return els[j];
+          var el = els[j];
+          // 唯二的拒绝理由（见上）：命中即跳过。
+          if (rejectReason(el, p) !== "") continue;
+          var rank = LOCATE_PRIORITY[classifyItem(el, p)] || 99;
+          if (rank < bestRank) { best = el; bestRank = rank; }
         }
       }
-      return null;
+      return best;
     }
 
     // 找到左侧画布栏的可滚动容器（虚拟化长列表的滚动宿主），用于把目标画布滚入渲染窗口。
+    // v1.0.18（BUG-0014）：候选**起点不止「第一个画布行」**——当「画布」列一屏都没渲染出行
+    //   （搜索过滤态 / 首屏尚未渲染 / 分组折叠）时 firstCanvasItem 可能取不到行，旧实现直接
+    //   返回 null，使整条滚动兜底（revealCanvasEl / scrollRowIntoView）被跳过。现改为：
+    //   先试第一个画布行，再以**「画布」列容器本身**为起点向上找滚动宿主。
+    // 注意：绝不用**页面列的行**作起点（否则会滚错容器 / 影响「页面」列滚动位置）。
     function getCanvasScrollContainer() {
-      var el = firstCanvasItem(currentPanels());
-      while (el && el !== document.body && el !== document.documentElement) {
-        var oy = getComputedStyle(el).overflowY;
-        if ((oy === "auto" || oy === "scroll") && el.scrollHeight - el.clientHeight > 8) return el;
-        el = el.parentElement;
+      var p = currentPanels();
+      var starts = [];
+      var row = firstCanvasItem(p);
+      if (row) starts.push(row);
+      for (var i = 0; i < p.canvas.length; i++) starts.push(p.canvas[i]);
+      for (var s = 0; s < starts.length; s++) {
+        var el = starts[s];
+        while (el && el !== document.body && el !== document.documentElement) {
+          var oy = "";
+          try { oy = getComputedStyle(el).overflowY; } catch (e) {}
+          if ((oy === "auto" || oy === "scroll") && el.scrollHeight - el.clientHeight > 8) return el;
+          el = el.parentElement;
+        }
       }
       return null;
     }
@@ -321,7 +540,8 @@
       if (!bar || !bar.staleIds) return false;
       var changed = false;
       Object.keys(bar.staleIds).forEach(function (id) {
-        if (bar.staleIds[id] && findCanvasEl(id)) {
+        // v1.0.18：用兜底候选复核 —— 折叠隐藏 / 被 sortable 容器包住的行同样算「回来了」
+        if (bar.staleIds[id] && findCanvasEl(id, true)) {
           bar.setStale(id, false);
           changed = true;
         }
@@ -333,8 +553,16 @@
     // 仅作尽力而为的补救：找不到时回调 (null)，并会把滚动位置还原，不打扰用户。
     var revealToken = 0;
     var revealTimer = null;
-    var REVEAL_MAX_STEPS = 24;
-    var REVEAL_STEP_MS = 24;
+    // R2 时长有界：整轮扫描总预算 ≤ 2500ms。
+    //   档数上限 REVEAL_MAX_STEPS = 90，单停靠点停留 REVEAL_STEP_MS = 27ms
+    //   → 90 × 27 = 2430ms ≤ 2500ms（预算余量 70ms）。
+    //   ⚠ 约束（R2/R3 联动）：「档数 × REVEAL_STEP_MS ≤ 2500」。若日后想调大 REVEAL_STEP_MS
+    //   以抗渲染延迟，必须把 REVEAL_MAX_STEPS 同步压到 ⌊2500 / REVEAL_STEP_MS⌋ 以内，
+    //   否则整轮会超预算（regress.py 全量门禁会假失败）。例：若 STEP_MS=32，则
+    //   MAX_STEPS 须 ≤ 78（78×32=2496≤2500）。
+    // R1 根因修复见下方 revealCanvasEl：步长上限恒为 clientHeight 比例值，绝不放大。
+    var REVEAL_MAX_STEPS = 90;
+    var REVEAL_STEP_MS = 27;
 
     // 搜索定位（v1.0.13）：轮询预算 / 间隔，以及在飞句柄（destroy 时取消）。
     var LOCATE_TIMEOUT_MS = 2000;
@@ -347,26 +575,51 @@
       if (!sc) { callback(null, false); return; }
       var start = sc.scrollTop;
       var maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+      // R1（根因修复）：步长上限恒为 clientHeight 比例值，**绝不放大到超过 clientHeight**。
+      // 旧代码的「放大分支」会在长列表上把 step 放大到远超虚拟列表单次渲染窗口（约
+      // clientHeight + overscan），导致档间留下从未渲染的缝隙，目标行（落在缝隙里）永远查不到
+      // → 报「未找到画布」。真机佐证：手动滚到可见后 [data-cid] 立刻命中，说明行只是被虚拟化卸载。
       var step = Math.max(120, Math.floor(sc.clientHeight * 0.75));
-      // 候选位置过密时按上限重新等分，保证总步数可控（含末尾的 maxTop 一档）。
-      if (maxTop > step * (REVEAL_MAX_STEPS - 1)) {
-        step = Math.ceil(maxTop / (REVEAL_MAX_STEPS - 1));
-      }
-      // 位置序列必须**预计算并显式补上 maxTop**：
-      // 旧实现在滚动前判定 `pos > maxTop`，而 pos 按 step 前进，
-      // 最后一个可达位置 maxTop 从未被真正访问 → 列表末尾（最后一屏）
-      // 的行在整个扫描过程中从未被渲染，findCanvasEl 恒为 null。
+      // 位置序列预计算 + 显式补上末尾 maxTop 一档（保证列表末行也能被访问，见历史注释）：
+      //   旧实现在滚动前判定 `pos > maxTop`，而 pos 按 step 前进，最后一个可达位置 maxTop
+      //   从未被真正访问 → 列表末尾（最后一屏）的行在整个扫描过程中从未被渲染，findCanvasEl 恒为 null。
+      // 若按 R1 步长所需档数超过 REVEAL_MAX_STEPS，则拆成**多趟交错扫描**（绝不放步长）：
+      //   passes = ceil(need / REVEAL_MAX_STEPS)，第 k 趟起点偏移 k*step/passes，
+      //   趟内仍按 R1 步长前进；每趟档数 ≤ REVEAL_MAX_STEPS → 单趟预算可控。
+      //   ⚠ 预算保证针对单趟（≤ REVEAL_MAX_STEPS 档）场景；多趟仅在需 >~1125 行时才触发，
+      //      属超出本缺陷实测范围的超大列表，按需以时间换覆盖，不在此约束内。
+      var need = Math.ceil(maxTop / step) + 1;            // 单趟停靠点总数（含末尾 maxTop）
+      var passes = Math.max(1, Math.ceil(need / REVEAL_MAX_STEPS));
       var positions = [];
-      for (var p = 0; p < maxTop; p += step) positions.push(p);
+      for (var k = 0; k < passes; k++) {
+        var off = passes > 1 ? Math.round(k * step / passes) : 0;
+        for (var p = off; p < maxTop; p += step) positions.push(p);
+      }
       if (positions.length === 0 || positions[positions.length - 1] !== maxTop) positions.push(maxTop);
+      // 多趟会有少量重叠停靠点，去重避免重复扫描。
+      var _seenPos = {};
+      positions = positions.filter(function (v) {
+        if (_seenPos[v]) return false;
+        _seenPos[v] = true;
+        return true;
+      });
       var idx = 0;
       function attempt() {
         if (token !== revealToken) { callback(null, true); return; }   // 已被新的切换请求取消
-        var el = findCanvasEl(id);
+        var el = findCanvasEl(id, true);   // v1.0.18：连带兜底候选（折叠分组 / 被 sortable 容器包住）
         if (el) { callback(el, false); return; }
         if (idx >= positions.length) {
-          try { sc.scrollTop = start; } catch (e) {}   // 未找到：还原用户原本的滚动位置
-          callback(null, false);
+          // R3 终极复核：已扫完所有停靠点仍未命中时，给虚拟列表最后一次渲染机会再查一次，
+          // 避免「刚滚到位就被判失败」。仅在最后一档之后多做一次等待+查询，不随档数线性放大，
+          // 预算内可控（最坏 91 × REVEAL_STEP_MS = 2457ms ≤ 2500ms）。
+          try { sc.scrollTop = positions[positions.length - 1]; } catch (e) {}
+          revealTimer = setTimeout(function () {
+            if (token !== revealToken) { callback(null, true); return; }
+            var el2 = findCanvasEl(id, true);
+            if (el2) { callback(el2, false); return; }
+            try { sc.scrollTop = start; } catch (e) {}   // 未找到：还原用户原本的滚动位置
+            callback(null, false);
+          }, REVEAL_STEP_MS);
           return;
         }
         try { sc.scrollTop = positions[idx]; } catch (e) {}
@@ -437,7 +690,7 @@
       function attempt() {
         timer = null;
         if (stopped || token !== revealToken) return;   // 被取消 / 被新切换取代
-        var el = findCanvasEl(id);
+        var el = findCanvasEl(id, true);   // v1.0.18：连带兜底候选（折叠分组 / 被 sortable 容器包住）
         if (el) { cb(el); return; }
         if (Date.now() >= deadline) { cb(null); return; }
         timer = setTimeout(attempt, stepMs);
@@ -523,21 +776,409 @@
       }
     }
 
-    // 真正执行切换：标记最近、滚动到可见、模拟点击左侧画布项、同步激活态
+    // 行是否真正可见（在渲染树里、有布局盒）。display:none / 被折叠 / 已脱离文档 → false。
+    function isRowVisible(el) {
+      try { return !!(el && el.getClientRects && el.getClientRects().length > 0); } catch (e) { return false; }
+    }
+
+    // ⚠ 与 isRowVisible 的**语义差异**（务必分清，二者互补，不可互相替代）：
+    //   isRowVisible(el)       只判「有没有布局盒」（在渲染树里且没被 display:none / 折叠 / 脱离
+    //                          文档）；**滚出滚动容器可视区的行照样有布局盒** → 仍返回 true。
+    //                          它回答的是「这个节点还算数吗」。
+    //   isRowInScroller(el, sc) 判「是否落在滚动容器 sc 的**可视矩形**内」（上下各 4px 容差）。
+    //                          它回答的是「用户此刻**看得见**它吗」。
+    // 「定位成功」= 在渲染树 **且** 在可视区内；只满足前者会出现「点标签后列表刷新回到顶部、
+    // 目标行滚出视野」这种「没定位到」的观感（BUG-0014 的真机现象）。
+    function isRowInScroller(el, sc) {
+      if (!el || !sc) return false;
+      try {
+        var r = el.getBoundingClientRect();
+        var c = sc.getBoundingClientRect();
+        var TOL = 4;
+        return r.top >= c.top - TOL && r.bottom <= c.bottom + TOL;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // 目标行所属的滚动宿主：向上找最近的、overflowY 为 auto|scroll 且**确实可滚动**
+    // （scrollHeight - clientHeight > 8）的祖先；找不到则退回 getCanvasScrollContainer()。
+    // 从 el 自身开始（行本身不会是滚动宿主，但含自身更稳妥）。
+    function getRowScroller(el) {
+      var node = el;
+      while (node && node !== document.body && node !== document.documentElement) {
+        var oy = "";
+        try { oy = getComputedStyle(node).overflowY; } catch (e) {}
+        if ((oy === "auto" || oy === "scroll") && node.scrollHeight - node.clientHeight > 8) return node;
+        node = node.parentElement;
+      }
+      return getCanvasScrollContainer();
+    }
+
+    // 收集包住目标行的「已折叠开关」祖先（aria-expanded="false"）。
+    // 只在**画布列容器内**逐级上溯，绝不越过画布列去碰页面/图层列与左侧 nav，
+    // 避免为了展开一个分组而误触发切换面板等副作用。
+    function collectCollapsedToggles(el, p) {
+      var out = [];
+      var node = el && el.parentElement, hop = 0;
+      while (node && hop++ < 10) {
+        if (p.canvas.length > 0 && !insideAny(node, p.canvas)) break;   // 越出画布列即停止
+        var exp = node.getAttribute ? node.getAttribute("aria-expanded") : null;
+        if (exp === "false") out.push(node);
+        node = node.parentElement;
+      }
+      if (!out.length && p.canvas.length === 0) {
+        // 没有画布列锚点的 DOM（改版 / 旧结构）：只认标准 aria-expanded，最多上溯 5 层
+        node = el && el.parentElement;
+        var hop2 = 0;
+        while (node && hop2++ < 5) {
+          if (node.getAttribute && node.getAttribute("aria-expanded") === "false") out.push(node);
+          node = node.parentElement;
+        }
+      }
+      return out;
+    }
+
+    // 「定位到画布所在位置」：确保目标行在左栏真正可见。
+    //   1) 已可见 → 直接 scrollIntoView(nearest) 并返回它；
+    //   2) 被收缩折叠隐藏 → 展开包住它的折叠开关（最多 2 层），展开后**重新定位**
+    //      （墨刀展开会重渲染左栏，原节点可能已被替换），再滚动到可见；
+    //   3) 返回最终可用的节点（调用方用它做点击切换）。
+    function ensureRowVisible(id, el) {
+      if (!el) return null;
+      var p = currentPanels();
+      if (isRowVisible(el)) {
+        try { el.scrollIntoView({ block: "nearest" }); } catch (e) {}
+        return el;
+      }
+      var toggles = collectCollapsedToggles(el, p);
+      for (var i = 0; i < toggles.length && i < 2; i++) {
+        try { toggles[i].click(); } catch (e) {}     // 展开折叠分组（墨刀原生行为）
+        var fresh = findCanvasEl(id, true);
+        if (fresh) el = fresh;
+        if (isRowVisible(el)) break;
+      }
+      var target = findCanvasEl(id, true) || el;
+      if (isRowVisible(target)) {
+        try { target.scrollIntoView({ block: "nearest" }); } catch (e) {}
+      }
+      return target;
+    }
+
+    // 把目标行滚入其滚动容器的可视区。
+    //   center=false → 只保证**完整可见**（尽量少动，不打扰用户）
+    //   center=true  → 尽量**居中**（点标签切换后把目标行放到视觉中心）
+    // 关键点：
+    //   · 先按 id **重新定位**行节点（传入的 el 可能是 React 重渲染前的旧节点，已脱离文档）；
+    //   · 用 rect 差算出相对滚动宿主的 rowTop，据此设 sc.scrollTop，再 clamp 到
+    //     [0, scrollHeight - clientHeight]；
+    //   · 另调 row.scrollIntoView({block:"nearest"}) 兜底（兼容非标准滚动宿主）。
+    function scrollRowIntoView(id, el, center) {
+      var row = null;
+      try { row = findCanvasEl(id, true) || el; } catch (e) { row = el; }
+      if (!row) return null;
+      var sc = getRowScroller(row);
+      if (sc) {
+        try {
+          var rr = row.getBoundingClientRect();
+          var cr = sc.getBoundingClientRect();
+          var rowTop = rr.top - cr.top + sc.scrollTop;     // 行在滚动内容坐标系中的位置
+          var rowH = rr.height;
+          var view = sc.clientHeight;
+          var maxTop = Math.max(0, sc.scrollHeight - view);
+          var t;
+          if (center) {
+            t = rowTop - (view - rowH) / 2;                // 居中
+          } else {
+            var rel = rr.top - cr.top;                     // 相对可视区顶端
+            if (rel < 0) t = rowTop - 8;                   // 在可视区上方 → 上移露出（留 8px 边距）
+            else if (rel + rowH > view) t = rowTop + rowH - view + 8;  // 在下方 → 下移露出
+            else t = sc.scrollTop;                         // 已完整可见 → 不动
+          }
+          t = Math.max(0, Math.min(maxTop, t));
+          sc.scrollTop = t;
+        } catch (e) {}
+      }
+      try { row.scrollIntoView({ block: "nearest" }); } catch (e) {}
+      return row;
+    }
+
+    // ---- 左栏选中态（v1.0.18 · 需求②）：给「定位到的那一行」加 md-rt-located ----
+    // 目的：用户点标签切换后，左栏能看出「当前画布是哪一行」。
+    // 纪律：
+    //   · 目标行若**已带墨刀自身激活类** → 什么都不做（不叠加、不与墨刀争样式）；
+    //   · 否则加 md-rt-located，并从**上一行**移除（模块级记住上次标记节点，保证可逆）；
+    //   · 样式由我方注入的 <style> 提供：左侧 3px 主色竖条 + 淡背景；
+    //     不写 !important、不覆盖 display/position/height 等布局属性。
+    var locatedRow = null;       // 上次被标记的节点（用于「从上一行移除」）
+    var locatedStyleEl = null;   // 注入的样式节点（destroy 时移除）
+    var keepHandle = null;       // 在飞的 keepRowVisible 句柄（新切换 / destroy 时取消）
+    var MOLDE_ACTIVE_SELECTOR =
+      ".active,.is-active,.is-selected,.selected,.current,[aria-selected='true']";
+
+    // 行（或其内层行项 / 外层 li 容器）是否已带墨刀自身激活类。
+    function rowHasMoldeActive(row) {
+      if (!row || !row.classList) return false;
+      try { if (row.matches && row.matches(MOLDE_ACTIVE_SELECTOR)) return true; } catch (e) {}
+      if (row.querySelector) {
+        try { if (row.querySelector(MOLDE_ACTIVE_SELECTOR)) return true; } catch (e) {}
+      }
+      try {
+        var li = row.closest ? row.closest("li.rn-content-item") : null;
+        if (li && li.matches && li.matches(MOLDE_ACTIVE_SELECTOR)) return true;
+      } catch (e) {}
+      return false;
+    }
+
+    function ensureLocatedStyle() {
+      if (locatedStyleEl && locatedStyleEl.parentNode) return;
+      locatedStyleEl = document.createElement("style");
+      locatedStyleEl.id = "md-recent-tabs-located";
+      locatedStyleEl.textContent =
+        ".md-rt-located{" +
+        "box-shadow:inset 3px 0 0 0 #2d7ff9;" +
+        "background:rgba(45,127,249,0.10);" +
+        "}";
+      (document.head || document.documentElement).appendChild(locatedStyleEl);
+    }
+
+    function clearLocatedRow() {
+      if (locatedRow && locatedRow.classList) {
+        try { locatedRow.classList.remove("md-rt-located"); } catch (e) {}
+      }
+      locatedRow = null;
+    }
+
+    function markLocatedRow(row) {
+      if (!row || !row.classList) return;
+      if (rowHasMoldeActive(row)) {          // 墨刀自身已做掉选中态 → 什么都不做
+        if (locatedRow && locatedRow !== row) clearLocatedRow();
+        return;
+      }
+      if (locatedRow && locatedRow !== row) {
+        try { locatedRow.classList.remove("md-rt-located"); } catch (e) {}
+      }
+      try { row.classList.add("md-rt-located"); } catch (e) {}
+      locatedRow = row;
+      ensureLocatedStyle();
+    }
+
+    // 点标签切换后把左栏目标行「保持在可视位置」——专治「点标签后又回到列表顶部」：
+    // 墨刀在切换画布时会重渲染左栏（重建行节点 / 复位 scrollTop），一次滚动会被冲掉。
+    // 策略：在 rAF、+60/180/400/800ms（不超过 ms）各复查一次：
+    //   · 行已在 sc 可视区内 → 提前结束；
+    //   · 被复位 → 重新 scrollRowIntoView；
+    //   · 行被重建（旧节点脱离文档）→ 重新 findCanvasEl(id,true) 再滚；
+    //   · 对新节点补选中态标记。
+    // **用户一旦手动滚动立即放弃**：document 上临时监听 wheel/keydown，sc 上监听
+    //   pointerdown/touchstart（capture、passive），触发即停止纠偏并解绑全部监听。
+    // token 与 revealToken 联动：新切换 / destroy 令在飞纠偏失效。返回 { cancel }。
+    function keepRowVisible(id, ms) {
+      var budget = (ms == null) ? 800 : ms;
+      var token = revealToken;
+      var timers = [];
+      var scBound = null;
+      var done = false;
+
+      function abort() { cleanup(); }
+
+      function cleanup() {
+        if (done) return;
+        done = true;
+        for (var i = 0; i < timers.length; i++) { try { clearTimeout(timers[i]); } catch (e) {} }
+        timers = [];
+        try { document.removeEventListener("wheel", abort, true); } catch (e) {}
+        try { document.removeEventListener("keydown", abort, true); } catch (e) {}
+        if (scBound) {
+          try { scBound.removeEventListener("pointerdown", abort, true); } catch (e) {}
+          try { scBound.removeEventListener("touchstart", abort, true); } catch (e) {}
+          scBound = null;
+        }
+      }
+
+      function tick() {
+        if (done) return;
+        if (token !== revealToken) { cleanup(); return; }   // 已被新的切换请求 / destroy 取代
+        var row = null;
+        try { row = findCanvasEl(id, true); } catch (e) { row = null; }
+        if (!row) { try { scrollRowIntoView(id, null, true); } catch (e) {} return; }
+        markLocatedRow(row);                                 // 行被重建 → 对新节点补选中态
+        var sc = getRowScroller(row);
+        if (sc && isRowInScroller(row, sc)) { cleanup(); return; }   // 已在可视区 → 提前结束
+        try { scrollRowIntoView(id, row, true); } catch (e) {}
+      }
+
+      // 立即绑定「用户手动滚动即放弃」的监听
+      try {
+        document.addEventListener("wheel", abort, { capture: true, passive: true });
+        document.addEventListener("keydown", abort, { capture: true, passive: true });
+      } catch (e) {
+        try {
+          document.addEventListener("wheel", abort, true);
+          document.addEventListener("keydown", abort, true);
+        } catch (e2) {}
+      }
+      try {
+        var probe = findCanvasEl(id, true);
+        scBound = probe ? getRowScroller(probe) : null;
+        if (scBound) {
+          scBound.addEventListener("pointerdown", abort, { capture: true, passive: true });
+          scBound.addEventListener("touchstart", abort, { capture: true, passive: true });
+        }
+      } catch (e) {}
+
+      // rAF 首查（等一帧让 React 提交重渲染）
+      try {
+        requestAnimationFrame(function () { tick(); });
+      } catch (e) { tick(); }
+
+      var marks = [60, 180, 400, 800];
+      for (var i = 0; i < marks.length; i++) {
+        if (marks[i] > budget) break;
+        (function (d) { timers.push(setTimeout(tick, d)); })(marks[i]);
+      }
+      return { cancel: cleanup };
+    }
+
+    // 真正执行切换：标记最近、定位到左栏可见位置、模拟点击左侧画布项、同步激活态。
+    // v1.0.18（BUG-0014）：补齐「点标签后把左栏滚到目标行并保持」——
+    //   ① 点击**前**先滚一次（保证行完整可见，便于墨刀接收点击）；
+    //   ② 点击**后**再滚一次并居中（墨刀切换会重渲染左栏，节点可能被重建）；
+    //   ③ keepRowVisible 复查若干次（墨刀重渲染会把 scrollTop 复位 → 重新滚回）；
+    //   ④ 落左栏选中态（md-rt-located；识别到墨刀自身激活类则不叠加）。
     function activateCanvas(id, name, el) {
       setStale(id, false);
       touch(id, name);
       scheduleRender();
-      try { el.scrollIntoView({ block: "nearest" }); } catch (e) {}
-      try { el.click(); } catch (e) {}   // 模拟点击左侧画布项 → 墨刀内部切换
+      // 保留展开折叠分组能力（折叠分组里的行需要先展开才能点到）
+      var target = ensureRowVisible(id, el) || el;
+      scrollRowIntoView(id, target, false);           // ① 点击前：保证完整可见
+      try { target.click(); } catch (e) {}            // 模拟点击左侧画布项 → 墨刀内部切换
+      var after = null;
+      try { after = findCanvasEl(id, true) || target; } catch (e) { after = target; }
+      scrollRowIntoView(id, after, true);             // ② 点击后：重新定位并居中
+      if (keepHandle) { try { keepHandle.cancel(); } catch (e) {} keepHandle = null; }
+      keepHandle = keepRowVisible(id, 800);           // ③ 复查，防被墨刀复位
+      markLocatedRow(after);                          // ④ 落左栏选中态
       bar.setActive(id);
     }
 
+    // 单个元素的简短签名：tagName + #id + 最多 3 个 class（诊断用，控制体积）。
+    function briefEl(el) {
+      if (!el || el.nodeType !== 1) return "";
+      var tag = (el.tagName || "").toLowerCase();
+      var idPart = el.id ? ("#" + el.id) : "";
+      var cls = "";
+      if (typeof el.className === "string" && el.className.trim()) {
+        cls = "." + el.className.trim().split(/\s+/).slice(0, 3).join(".");
+      }
+      return tag + idPart + cls;
+    }
+
+    // 元素的祖先链（含自身），最多 maxDepth 层。每层形如 div#panel-canvas-col.screen-panel。
+    function ancestorChain(el, maxDepth) {
+      var out = [], node = el, depth = 0, max = maxDepth || 8;
+      while (node && node.nodeType === 1 && depth < max) {
+        out.push(briefEl(node));
+        node = node.parentElement;
+        depth++;
+      }
+      return out;
+    }
+
+    // 统计一组选择器在文档中的命中数（某个选择器非法时记 -1，便于发现语法问题）。
+    function anchorHitCounts(selectors) {
+      var out = {};
+      for (var i = 0; i < selectors.length; i++) {
+        try { out[selectors[i]] = document.querySelectorAll(selectors[i]).length; }
+        catch (e) { out[selectors[i]] = -1; }
+      }
+      return out;
+    }
+
+    // 定位失败时的结构化诊断：把「为什么找不到」一次性打在 Console 里，便于真机
+    // （内网 10.83.117.101 需登录、无法远程调试）不看源码也能一次定位。
+    // v1.0.18 加固：对**每个**同 cid 的通用树项输出
+    //   tag / class / data-interactive-target-type / layerItem / visible /
+    //   kind / 归属面板 / 被拒原因 / 命中优先级 / 完整祖先链（最多 8 层，
+    //   tag + 主要 class + id）；并输出各已知锚点命中数、data-cid 命中总数、
+    //   搜索框是否存在、getRecentIds()。全部装在一个可折叠对象里，不打印巨量文本。
+    function diagnoseLocateFailure(id, name) {
+      try {
+        var p = currentPanels();
+        var esc = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(id) : id;
+        var rowEls = document.querySelectorAll(CANVAS_ITEM_SELECTOR);
+        var cidEls = document.querySelectorAll('[data-cid="' + esc + '"]');
+
+        var candidates = [];
+        for (var i = 0; i < rowEls.length && candidates.length < 40; i++) {
+          var el = rowEls[i];
+          if (el.getAttribute("data-cid") !== id) continue;
+          var reason = rejectReason(el, p);
+          var kind = classifyItem(el, p);
+          candidates.push({
+            tag: el.tagName,
+            cls: String(el.className || "").slice(0, 120),
+            type: el.getAttribute("data-interactive-target-type"),
+            layerItem: rowHasLayerItem(el),
+            visible: isRowVisible(el),
+            kind: kind,
+            panel: matchAncestor(el, CANVAS_PANEL_SELECTORS) ? "canvas"
+                   : matchAncestor(el, LAYER_TREE_PANEL_SELECTORS) ? "layerTree"
+                   : matchAncestor(el, PAGE_LIST_PANEL_SELECTORS) ? "pageList" : "none",
+            blacklistAny: matchAncestor(el, NON_CANVAS_PANEL_SELECTORS),
+            rejected: reason || "none",          // "inLayerTree" / "layerItem" / "none"
+            priority: LOCATE_PRIORITY[kind] || 99,
+            acceptedAs: reason ? null : kind,    // 非 null = 会被 findCanvasEl 接受
+            ancestors: ancestorChain(el, 8)
+          });
+        }
+
+        var picked = findCanvasEl(id, true);
+        // R7：若 findCanvasEl 能返回行、但该行不在可视区（被折叠 / 被溢出裁掉），
+        // 置 rowFoundButHidden=true —— 让真机 Console 自己告诉我们折叠是怎么表达的，
+        // 而不是在此加猜测式点击启发式（BUG-0011/0012/0013 都源于启发式误判，务必止步）。
+        // collectCollapsedToggles 只认 aria-expanded="false"，保持原样不动。
+        var rowFoundButHidden = !!(picked && !isRowVisible(picked));
+        return {
+          version: MD_VERSION,
+          id: id,
+          name: name,
+          searchBox: !!findScreenSearchBox(),
+          historyIds: getRecentIds(),
+          trackedIds: Object.keys(seen),
+          cidHitTotal: cidEls.length,        // 全文档 [data-cid=<id>] 命中总数
+          rowHitTotal: candidates.length,    // 通用树项中同 cid 的条数
+          anchors: {                         // 各已知锚点命中数（锚点被改版换名时此处会全 0）
+            canvas: p.canvas.length,
+            layerTree: p.layerTree.length,
+            pageList: p.pageList.length,
+            canvasPanelPresent: canvasPanelPresent(p),
+            canvasSelectors: anchorHitCounts(CANVAS_PANEL_SELECTORS),
+            layerTreeSelectors: anchorHitCounts(LAYER_TREE_PANEL_SELECTORS),
+            pageListSelectors: anchorHitCounts(PAGE_LIST_PANEL_SELECTORS)
+          },
+          collapsedToggles: cidEls.length ? collectCollapsedToggles(cidEls[0], p).length : 0,
+          rowFoundButHidden: rowFoundButHidden,
+          picked: picked ? {
+            tag: picked.tagName,
+            cls: String(picked.className || "").slice(0, 120),
+            kind: classifyItem(picked, p)
+          } : null,
+          candidates: candidates
+        };
+      } catch (e) {
+        return { version: MD_VERSION, id: id, name: name, error: String(e) };
+      }
+    }
+
     // 定位失败：给出可见反馈，绝不静默删除标签
-    function notifyUnreachable(name) {
+    function notifyUnreachable(name, id) {
       var msg = "未找到画布「" + name + "」，请先在左侧画布栏展开或滚动到它，再点击标签切换";
       if (typeof console !== "undefined" && console.warn) {
         console.warn("[modao-recent-tabs] " + msg);
+        // 结构化诊断（供真机取证；数据量小，常开无副作用）
+        console.warn("[modao-recent-tabs] 定位失败诊断:", diagnoseLocateFailure(id, name));
       }
       if (bar && typeof bar.toast === "function") bar.toast(msg, "warn");
     }
@@ -717,7 +1358,10 @@
         // 上一次的扫描会继续跑完并回调 activateCanvas(旧 id)，把画布切回先点的那个
         // （连点竞态：点 A 需扫描 → 立刻点 B → 结果被 A 覆盖）。
         revealToken++;
-        var el = findCanvasEl(id);
+        // v1.0.18：连带兜底候选一起找 —— 目标行可能被收缩折叠隐藏、或因滚动不在
+        // 渲染窗口里、或外层被 sortable 容器（黑名单名）包住。命中即切换，不必再
+        // 走后面「搜索重定位 → 滚动扫描 → 提示」的长链路。
+        var el = findCanvasEl(id, true);
         if (el) { activateCanvas(id, item.name, el); return; }
         // 画布项当前不在左侧栏 DOM：可能是搜索过滤态 / 虚拟滚动未渲染 / 文件夹折叠 /
         // SPA 重建，这**不是**「画布已删除」的充分证据。旧逻辑在此直接 delete seen + return，
@@ -734,12 +1378,13 @@
           revealCanvasEl(id, function (found, canceled) {
             if (canceled) return;                                  // 已被新的切换请求取代
             if (found) { activateCanvas(id, item.name, found); return; }
-            notifyUnreachable(item.name || id);
+            notifyUnreachable(item.name || id, id);
           });
         });
       },
       onClose: function (item) {
         closeId(item.id);
+        clearLocatedRow();   // v1.0.18：关闭标签时清除左栏选中态标记（保持可逆）
         persistClosed();
         scheduleRender();
       },
@@ -1134,6 +1779,13 @@
         if (pollTimer) clearInterval(pollTimer);
         if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
         revealToken++;   // 使进行中的扫描/搜索定位回调失效
+        // v1.0.18：清干在飞的「保持目标行可见」纠偏（定时器 + 全部监听），并移除选中态标记与样式
+        if (keepHandle) { try { keepHandle.cancel(); } catch (e) {} keepHandle = null; }
+        clearLocatedRow();
+        if (locatedStyleEl && locatedStyleEl.parentNode) {
+          try { locatedStyleEl.parentNode.removeChild(locatedStyleEl); } catch (e) {}
+        }
+        locatedStyleEl = null;
         if (locateHandle) { locateHandle.cancel(); locateHandle = null; }
         // 待执行的重渲染也要清掉：否则销毁后仍会对已脱离文档树的旧 bar 跑一次 renderList()
         if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }

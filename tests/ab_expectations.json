@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "回归门禁的 A/B 对照矩阵（scripts/regress.py 读取）。",
+    "ref 可以是 tag 或 commit：v1.0.17 用提交号 5f08557（本地 tag v1.0.17 亦指向它，用提交号更稳）。",
+    "v1.0.18 本轮修复后会被提交并打 tag（见 CHANGELOG「版本号约定」）；历史版本仍按上述 ref 引用。",
+    "  此前的「旧 1.0.18（临时 1.0.19 包）从未提交、无 tag 可取」说法已失效——该临时包不再作为任何 A/B 对照；",
+    "  BUG-0013 的失败由 tests/test_relocate_collapsed.py 的 D1/D2 用例锁定，BUG-0015 的失败由",
+    "  tests/test_reveal_gap.py 的【回归】组（v1.0.16 → regression_fail）锁定。",
+    "expect=regression_pass → 该版本【回归】组必须全过；expect=regression_fail → 必须出现【回归】组失败。",
+    "新增/修复缺陷时：在本文件补一条对照，并把锁定用例写进 CHANGELOG.md 的缺陷索引。"
+  ],
+  "test_relocate_collapsed.py": [
+    {
+      "ref": "v1.0.16",
+      "note": "上一个好版本（BUG-0012 / BUG-0013 均未引入）：定位能力是本版修复的保底基准（对真画布行不缩水）→ 【回归】组必须全过",
+      "expect": "regression_pass"
+    },
+    {
+      "ref": "5f08557",
+      "note": "v1.0.17（引入 BUG-0012 的提交；同时是 BUG-0013 的坏版本对照）→ 必须复现「未找到画布」",
+      "expect": "regression_fail"
+    }
+  ],
+  "test_reveal_gap.py": [
+    {
+      "ref": "v1.0.16",
+      "note": "放大分支自 v1.0.13 即在，v1.0.16 同样漏扫（N=980 时第 71 行 cid P71 / 下标 70 落在档间缝隙）→ 必须复现「未找到画布」（regression_fail）。本缺陷无 regression_pass 对照：所有历史版本都有该分支，当前核心通过由 regress.py [2/4] 全量回归覆盖。",
+      "expect": "regression_fail"
+    }
+  ]
+}

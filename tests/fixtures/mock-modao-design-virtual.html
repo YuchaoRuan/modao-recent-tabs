@@ -2,14 +2,22 @@
 <!--
   模拟墨刀企业版「设计文件页」——**左侧画布栏按需渲染（虚拟滚动）**版本。
 
-  用途：复现「多个标签时点击标签 → 标签被自动关闭且画布未切换」BUG。
+  用途：复现「多个标签时点击标签 → 标签被自动关闭且画布未切换」BUG；
+        以及（BUG-0015）「长列表因滚动不在可见区 → 点标签必须定位到画布」回归。
+
   与 mock-modao-design.html 的区别：
-    - 左侧画布栏为虚拟化长列表（40 页 + 折叠文件夹），
-      只有进入（接近）视口的行才真正存在于 DOM —— 与真实墨刀长列表一致。
-      因此 `document.querySelector('div.rn-list-item[data-cid="X"]')`
+    - 左侧画布栏为虚拟化长列表，只有进入（接近）视口的行才真正存在于 DOM ——
+      与真实墨刀长列表一致。因此 `querySelector('div.rn-list-item[data-cid="X"]')`
       对未渲染的行必然返回 null，而该画布其实完好存在。
     - 点击左侧项会触发整栏重渲染（模拟墨刀 SPA 重绘），节点被替换。
     - 折叠文件夹「归档」内的画布默认不在 DOM 中（模拟文件夹折叠）。
+
+  参数化（`?rows=N`，**默认 40**，保证既有 8 个用例行为不变）：
+    - `?rows=980` 构造「长列表」复现 BUG-0015 的漏扫缝隙 —— 旧核心（放大分支）
+      会把 step 放大到远超渲染窗口，导致目标行（如 P071）落在档间缝隙里从未被
+      渲染 → 点标签报「未找到画布」；修复后步长恒 ≤ clientHeight，无缝覆盖。
+    - `.rn-virtual` 高度**写死 600px** 使 `clientHeight` 确定（step = max(120,
+      floor(600*0.75)) = 450，与目标行窗口 756px 无缝）。
 
   其余结构（app-shell / 工具栏 / .canvas-title / 右面板）与基础夹具保持一致，
   以便 A2 布局避让逻辑同样适用。
@@ -32,8 +40,10 @@
       background: #f7f8fa; border-right: 1px solid #e5e7eb;
       padding: 8px; display: flex; flex-direction: column;
     }
-    /* 虚拟滚动视口：只有视口内的行会真正渲染到 DOM */
-    .rn-virtual { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; }
+    /* 虚拟滚动视口：只有视口内的行会真正渲染到 DOM。
+       高度写死 600px（BUG-0015）：使 clientHeight 确定，step = max(120, floor(600*0.75))=450，
+       与目标行渲染窗口（≈756px）无缝，便于精确复现/修复漏扫缝隙。 */
+    .rn-virtual { flex: 0 0 600px; height: 600px; overflow-y: auto; overflow-x: hidden; }
     .rn-list-item {
       height: 32px; line-height: 16px; padding: 8px 10px; border-radius: 6px;
       margin-bottom: 4px; cursor: pointer; font-size: 13px; color: #1f2329;
@@ -75,8 +85,20 @@
   (function () {
     "use strict";
     var ROW_H = 36;               // 32px 行高 + 4px 间距
+    // BUG-0015：参数化行数。?rows=N（默认 40，保证既有 8 个用例行为不变）；
+    // ?rows=980 构造长列表复现旧核心的漏扫缝隙（P071 落在档间缝隙里）。
+    var ROWS = 40;
+    try {
+      var _qs = new URLSearchParams(window.location.search);
+      var _r = parseInt(_qs.get("rows"), 10);
+      if (_r && _r > 0) ROWS = _r;
+    } catch (e) {}
     var PAGES = [];
-    for (var i = 1; i <= 40; i++) {
+    // 两位零填充：P01..P40（默认）/ … / P980（?rows=980）。
+    // ⚠ 与 tests/test_regression_tab_autoclose.py 共享本夹具，其用例依赖两位 cid（P01/P10/P40/A2），
+    //   故保持两位；BUG-0015 用例（test_reveal_gap.py）的 TARGET 取「P71」（第 71 行）与之对齐，
+    //   功能等价（同一行落在放大分支的漏扫缝隙里）。
+    for (var i = 1; i <= ROWS; i++) {
       var n = i < 10 ? "0" + i : String(i);
       PAGES.push({ cid: "P" + n, name: "页面 " + n });
     }
@@ -86,7 +108,7 @@
       { cid: "A3", name: "归档-旧登录" }
     ];
 
-    var state = { active: "P01", archOpen: false, clicks: {} };
+    var state = { active: "P01", archOpen: false, clicks: {}, clickLog: [] };
     var vp = document.getElementById("rn-virtual");
     var titleEl = document.querySelector(".rn-canvas .canvas-title");
 
@@ -125,6 +147,7 @@
       if (!item) return;
       var cid = item.getAttribute("data-cid");
       state.clicks[cid] = (state.clicks[cid] || 0) + 1;
+      state.clickLog.push({ cid: cid, panel: "canvas" });   // 供测试校验「核心点了哪个 cid」
       if (item.classList.contains("folder")) {
         state.archOpen = !state.archOpen;
         render();
@@ -153,7 +176,15 @@
       scrollToCid: scrollToCid,
       setActive: function (cid) { state.active = cid; render(); },
       getClicks: function () { return state.clicks; },
-      inDom: function (cid) { return !!vp.querySelector('.rn-list-item[data-cid="' + cid + '"]'); }
+      clickLog: function () { return state.clickLog.slice(); },
+      inDom: function (cid) { return !!vp.querySelector('.rn-list-item[data-cid="' + cid + '"]'); },
+      isVisible: function (cid) {
+        var el = vp.querySelector('.rn-list-item[data-cid="' + cid + '"]');
+        if (!el) return false;
+        var r = el.getBoundingClientRect();
+        var c = vp.getBoundingClientRect();
+        return r.top >= c.top - 1 && r.bottom <= c.bottom + 1;
+      }
     };
     render();
   })();
