@@ -651,3 +651,36 @@ python scripts/regress.py
     **禁止改动三处版本号**（`VERSION` / `manifest.json` / 核心 `MD_VERSION`）。
     期间如需给用户真机试装，用**当前待发布号**打包并在本文件登记试装事实，**不得**临时另起
     一个新的版本号（否则会出现「改了没生效 / 到底跑的是哪一版」的排查灾难——1.0.19 的教训）。
+
+---
+
+## 四、v1.0.20 发布记录（2026-09-23 / 补挂资产 2026-09-24）
+
+- **Tag**：`v1.0.20`（指向 `main`，含 BUG-0022 修复，`MD_BUILD=locate-robust.9`）。
+- **GitHub Release 资产**：
+  | 资产 | 大小 | 说明 |
+  |------|------|------|
+  | `modao-recent-tabs-browser.zip` | 61,861 B | 浏览器扩展包，`MD_VERSION=1.0.20` / `MD_BUILD=locate-robust.9`，含 BUG-0022 修复 |
+  | `modao-recent-tabs-plugin.zip` | 901,737 B | 桌面注入插件包（`app.asar.patched` + `apply-patch.cmd` + README + `src/` + `tools/`）|
+  | `app.asar.patched` | 1,546,372 B | 桌面端补丁（保留为独立下载项，未删）|
+
+### 4.1 资产补挂（2026-09-24）
+- **问题**：上轮发版时 `release/` 本地暂存区未被发布命令重建，且浏览器源目录
+  `release/modao-recent-tabs-browser/` 内的 `recent-tabs-core.js` 是落后两代
+  （`locate-robust.7`、版本号仍 `1.0.18`）的陈旧副本，导致打出的 `browser.zip`
+  版本号滞后；GitHub 上 `v1.0.20` 当时只挂了桌面端 `app.asar.patched`（孤儿）。
+- **处理**：把根目录 `recent-tabs-core.js`（已升 `1.0.20`/`locate-robust.9`）与
+  `manifest.json` 同步回浏览器源目录并重打 zip；用 `gh release upload` 补挂
+  `browser.zip` + `plugin.zip` 到 `v1.0.20`。孤儿 `app.asar.patched` 按用户「仅补挂」
+  指令**保留**（内容已含在 `plugin.zip` 内，若需清理可删）。
+
+### 4.2 `scripts/release.py` 加固（2026-09-24，提交 `f2e69c8`）
+- **`build()` 新增同步步骤**：打包前先把仓库根目录的 8 个浏览器扩展源文件
+  （`background.js` / `content.js` / `manifest.json` / `options.html` / `options.js` /
+  `recent-tabs-core.js` / `tabbar.css` / `tabbar.js`）按字节对比并强制覆盖到
+  `BROWSER_SRC`，杜绝「源目录落后导致 zip 版本滞后」的回归。受控验证：注入
+  过期 `1.0.18` 后 `build()` 自动覆盖回 `1.0.20`。新增 `--no-sync` 可跳过。
+- **`_env()` 修正**：沙箱内直连 GitHub 可达，但经本地代理 `127.0.0.1:4608` 会被 502 拦截。
+  改为把 `api.github.com` / `github.com` / `uploads.github.com` / `*.githubusercontent.com`
+  加入 `NO_PROXY` 并清空 `HTTPS_PROXY`，走直连（`gh` 子命令据此可正常上传）。
+- **影响文件**：`scripts/release.py`（已提交 `main` `f2e69c8`；侧工作树分支 `14d4ebe` 同源）。
