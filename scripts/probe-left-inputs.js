@@ -13,7 +13,7 @@
  *   placeholder 不含中文关键词）；或 (b) 早期真机取样不足（只看前 8 个 input）。
  *
  * 本探针把三个条件逐层剥开，一次分清到底卡在哪个条件：
- *   · coreVersion        版本指纹，先证版本；不是 1.0.18 本轮结论一律作废
+ *   · coreVersion        版本指纹，先证版本；不是 1.0.20 本轮结论一律作废
  *   · searchLike         命中关键词的所有 input（决定「关键词不匹配」还是「压根不是 input」）
  *   · placeholderTop300  顶部 300px 内所有 input 的 placeholder 原文（暴露「关键词写法变了」）
  *   · topInputs          前 15 个 input 全字段（暴露「没 placeholder / 是英文」）
@@ -26,7 +26,7 @@
  * 用法：打开目标画布页 → F12 Console → 粘贴 probe-left-inputs.min.js → 复制输出 JSON 回贴。
  * ========================================================================= */
 (function () {
-  var VERSION_EXPECTED = "1.0.18";   // 期望的核心版本；三处版本同升时记得同步改这里
+  var VERSION_EXPECTED = "1.0.20";   // 期望的核心版本；三处版本同升时记得同步改这里
   var KEY_RE = /搜索|查找|检索/;       // 与核心 findScreenSearchBox 同口径的关键词
 
   var qa = function (s) { try { return document.querySelectorAll(s); } catch (e) { return []; } };

@@ -15,7 +15,7 @@
  *   4. 输出会 console.log 并 copy() 到剪贴板，直接 Ctrl+V 回贴。
  *
  * 判读要点：
- *   · coreVersionAttr        —— 先看这行，必须等于你期望的版本（默认 1.0.18），否则下面结论一律作废；
+ *   · coreVersionAttr        —— 先看这行，必须等于你期望的版本（默认 1.0.20），否则下面结论一律作废；
  *   · scroller.top           —— > 0 表示确实滚到了列表中部/下部（旧版会停在 0，即「回到顶部」）；
  *   · target.inScroller      —— true 表示目标行**确实落在滚动容器可视区内**（与扩展同口径，上下 4px 容差）；
  *   · target.hasOurMarker    —— true 表示我方选中态标记 `md-rt-located` 落在该行；
@@ -34,7 +34,7 @@
  * 只读脚本：不改任何页面状态，不点任何列表项。
  * ========================================================================= */
 (function () {
-  var VERSION_EXPECTED = "1.0.18";   // 期望的核心版本；三处版本同升时记得同步改这里
+  var VERSION_EXPECTED = "1.0.20";   // 期望的核心版本；三处版本同升时记得同步改这里
   var TOL = 4;                       // 可视区上下容差（与核心 isRowInScroller 同口径）
 
   var qa = function (s) { try { return document.querySelectorAll(s); } catch (e) { return []; } };

@@ -19,7 +19,7 @@
  * 只读脚本：不改任何页面状态，不点任何列表项（不写搜索框）。
  * ========================================================================= */
 (function () {
-  var VERSION_EXPECTED = "1.0.18";   // 期望的核心版本；三处版本同升时记得同步改这里
+  var VERSION_EXPECTED = "1.0.20";   // 期望的核心版本；三处版本同升时记得同步改这里
 
   var qa = function (s) { try { return document.querySelectorAll(s); } catch (e) { return []; } };
   var brief = function (n) {
