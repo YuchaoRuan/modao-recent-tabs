@@ -39,5 +39,12 @@
       "note": "BUG-0019（真机折叠零痕迹 + a.expander + 无搜索框）的「引入前最后一版」= locate-robust.3 基线。H8 在此**必然失败**：aria 展开只认 aria-expanded（真机 0 个）、结构展开找不到「不可见 ul」（子行已移出 DOM），两者都返回 0 → fail() → 弹「未找到画布」。本缺陷同样无 regression_pass 对照（所有历史版本都缺「记录父分组链」这一能力）。",
       "expect": "regression_fail"
     }
+  ],
+  "test_seed_folded.py": [
+    {
+      "ref": "9d7827f",
+      "note": "BUG-0022（种子画布被折叠+父级滚出可见区后点其标签报「找不到画布」）的「引入前最后一版」= locate-robust.8。根因：autoSeed 路径 syncActiveScreen 只 touch() 建标签、从未 collectGroupPath()，groupPath[id] 为空；真机折叠（子 ul 出 DOM）+ 无搜索框下唯一展开手段 expandRecordedPath() 完全依赖 groupPath → 缺链即失败。本缺陷无 regression_pass 对照（所有历史版本都没有「种子路径记录父文件夹链」这一能力）。9d7827f 必须在【回归】组失败并复现用户原话「未找到画布，请先在左侧画布栏展开或滚动到它，再点击标签切换」，且 title 不切换；修复版（locate-robust.9）通过由 regress.py [2/4] 全量回归覆盖。⚠ 9d7827f 是「修复前 HEAD」，修复提交后它仍是该提交的固定哈希，A/B 不受影响。",
+      "expect": "regression_fail"
+    }
   ]
 }

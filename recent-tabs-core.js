@@ -184,7 +184,7 @@
     //   locate-robust.2 → 能力串联 + 搜索四级探测 + 黑名单拆分 + aria 展开
     //   locate-robust.3 → 追加末位兜底「按结构展开折叠分组」（expandCollapsedByStructure）
     //                     + 诊断新增 panelStructuralToggles（只统计不点击）
-    var MD_BUILD = "locate-robust.8";
+    var MD_BUILD = "locate-robust.9";
 
     // 左侧画布项的 DOM 形态不止一种：运行端探针（sniffer-canvas-item.js）确认
     // 同时存在 div.rn-list-item[data-cid] 与 li.rn-content-item[data-cid] 两种形态，
@@ -1738,7 +1738,7 @@
           if (!isCanvasPanelItem(found[j], strict)) continue;
           var aid = found[j].getAttribute("data-cid");
           // 名称可能为空（画布项文本未渲染完），交给调用方按 name 校验处理
-          if (aid) return { id: aid, name: readName(found[j]), reliable: true };
+          if (aid) return { id: aid, name: readName(found[j]), reliable: true, el: found[j] };
         }
       }
       // 名称反查兜底：真机在「刚切页、激活 class 还没落到画布面板」的瞬间走这里。
@@ -1755,7 +1755,7 @@
             if (!isCanvasPanelItem(els[k], strict)) continue;
             // 按归一化名字比对（画板项带序号前缀，标题不带）
             if (normalizeName(readName(els[k])) === nTitle) {
-              return { id: els[k].getAttribute("data-cid"), name: readName(els[k]), reliable: false };
+              return { id: els[k].getAttribute("data-cid"), name: readName(els[k]), reliable: false, el: els[k] };
             }
           }
         }
@@ -1818,6 +1818,12 @@
       }
       autoSeedUsed = true;                           // 只带出一次，用完即关
       var ok = touch(active.id, active.name);
+      // BUG-0022：种子画布（进入文件默认带出的那个）原先只 touch() 建标签、从未
+      // collectGroupPath()，导致 groupPath[id] 为空。真机折叠 = 子 ul 从 DOM 移除且无
+      // 搜索框，唯一能把它重新展开的 expandRecordedPath() 完全依赖 groupPath —— 缺链即
+      // 「找不到画布」。进入文件时该画布正可见，此刻收集父文件夹链必能成功（与点击路径
+      // trackCanvasFromEvent 同一动作），后续即便被折叠 + 滚走，点其标签也能逐级展开定位。
+      try { groupPath[active.id] = collectGroupPath(active.el); } catch (e) { groupPath[active.id] = []; }
       if (ok) lastActiveId = active.id;
       return ok;
     }

@@ -56,6 +56,13 @@ python tests/test_locate_hidden.py                                   # 必须全
 #   git show 6288b2d:recent-tabs-core.js > _core_pre2.js
 python tests/test_locate_hidden.py --core _core_pre2.js              # 【回归】组必须失败（复现用户原话）
 python tests/test_locate_hidden.py --carrier desktop                 # 用 desktop/ 副本跑 parity
+
+# BUG-0022 种子画布折叠回归：进入设计文件时默认带出的画布（种子路径建标签）被折叠进画布树 +
+#   父级文件滚出可见区后，点其标签必须能展开定位并切换（真机契约：折叠=ul 出 DOM + 无搜索框）
+python tests/test_seed_folded.py                                     # 必须全绿（S1 6/6 + S3 2/2 + S4 2/2，EXIT=0）
+python tests/test_seed_folded.py --carrier desktop                   # 用 desktop/ 副本跑 parity
+#   git show 9d7827f:recent-tabs-core.js > _core8.js
+python tests/test_seed_folded.py --core _core8.js                    # 【回归】必须失败（复现用户原话「未找到画布」）
 ```
 
 > A/B 对照矩阵已固化在 `tests/ab_expectations.json`，由 `scripts/regress.py` 的 [3/4] 段自动执行
@@ -79,6 +86,7 @@ python tests/test_locate_hidden.py --carrier desktop                 # 用 deskt
 | `tests/test_relocate_collapsed.py` | 「点标签提示未找到画布」（BUG-0012/BUG-0013）+「点标签后定位到列表位置并保持 + 左栏选中态」（BUG-0014）回归 **15 组**：C0-C5（折叠不可见 / 滚动未渲染 → 定位并切换；分组行可建标签；不误点图层；画布列卸载不误点其它列）+ **D1-D4（画布列容器锚点被改版换名：行被 sortable 容器包住 / 折叠隐藏 → 仍须定位并切换；带 `layer-item` 的页面/图层列同 cid 节点绝不误点；未知面板里同 cid 的杂散行不得因优先级反转抢占真画布行）** + **E1-E5（全量渲染下目标行滚出可视区 → 点标签必须滚回；切换后重渲染+滚动归零 → 目标行仍须在可视区（锁 BUG-0014 真机现象）；左栏目标行呈选中态且可逆无残留；用户手动滚动不被抢回；全量渲染下不得点到页面/图层列同 cid 行）**。断言按【回归】/【需求】/【保护】分组，支持 `--core` 做三方 A/B |
 | `tests/test_locate_hidden.py` | **定位加固第 2 轮**（BUG-0016 / BUG-0017 / BUG-0018）回归 **7 组 / 67 断言**：**H1**（折叠 ⇒ 子行**不渲染** + 探测不到搜索框 → 必须靠「展开画布列内折叠分组」找回并切换）、**H3**（**真机折叠形态**：无 `aria-expanded` + 搜索框 placeholder 漂移 + 下推 >300px → 必须靠「结构优先」探到搜索框、用检索找回；【需求】清空检索词后目标行仍须可见）、**H4**（行被 `.layer-sortable-list` —— 图层树同名 sortable 组件 —— 包住时定位不得被容器名拒绝）、**H5**（**真机折叠形态 + 搜索框探测不到**：两条主路全空 → 必须靠**结构判据**展开折叠分组；这是旧版**必然失败**的盲区）、**H6**（只读探针 `__mdRtProbe()` 可用且**无副作用**）、**H7**（**合成的展开点击不得凭空长标签**：去掉分组行 `folder` 类名后走两条展开路径，标签栏不得多出分组标签；R11 护栏，删掉 `suppressTrack` 守卫本用例必失败）、**H2【保护】**（画布列整体卸载 → 必须给提示且绝不误点图层/页面列同 cid 节点）。A/B 对照 `6288b2d` → `regression_fail`（旧核心 27 条失败，toast 逐字复现用户原话） |
 | `scripts/dump-canvas-dom.js` | **真机取证脚本**（IIFE、只读、不污染全局）：无新版构建时可直接粘到墨刀设计页 Console，dump 当前 DOM 真相 —— 核心版本 / 各已知锚点选择器命中数 / 所有 `[data-cid]` 行的签名（tag·class·type·layerItem·visible·panel·被拒原因）与完整祖先链（≤8 层）/ 按名字模糊匹配的候选；`console.log(JSON.stringify(...))` + `copy(...)` 便于回贴。用法见 `CHANGELOG.md` v1.0.18 / `dump-canvas-dom.js` 顶部注释 |
+| `tests/test_seed_folded.py` | **BUG-0022**（种子画布折叠+父级滚出可见区后点其标签报「找不到画布」）回归 **3 组 / 10 断言**：**S1**【回归】种子画布折叠+detach+无搜索框 → 点标签必须展开 `GFOLD` 并切过去（title 命中）；并入【保护】不得删标签 / 分组须重新展开 / 行须重新可见。**S3**【保护】记录父文件夹链不得凭空长出 `GFOLD` 标签（种子标签集合 == [G05]）。**S4**【保护】autoSeed「只带出一次」闸门不被本修复改动。⚠ 夹具的「图层」列与「画布」列**共用同 data-cid**（G05），前置断言用 `canvas_row_in_dom()`（限画布列容器）而非 `__mock.inDom()`（全局面查询会被图层列节点污染）。A/B：`9d7827f`（`locate-robust.8`，修复前）→ `regression_fail`，toast 逐字复现用户原话 |
 | `tests/test_core_logic.py` | 核心逻辑 10 用例 |
 | `tests/test_tabbar_ui.py` | 组件 1 用例（演示页） |
 | `tests/test_regression_tab_autoclose.py` | 标签自动关闭 BUG 回归 5 用例（虚拟滚动夹具） |
