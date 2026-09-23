@@ -7,13 +7,14 @@
 路径给 `gh`，绕过 shell glob。
 
 子命令：
-  build    把 release/modao-recent-tabs-browser/ 的 8 个扩展文件打成
-           release/modao-recent-tabs-browser.zip（文件位于 zip 根）。
+  build    先把仓库根目录的 8 个浏览器扩展源文件同步到 BROWSER_SRC，再打成
+           release/modao-recent-tabs-browser.zip（文件位于 zip 根）。--no-sync 可跳过同步。
   upload   上传资产到指定 tag 的 GitHub Release（经 subprocess，不经 shell）。
   clean    删除 release/ 下遗留的一次性辅助脚本（_zip_browser.py / _upload_assets.py 等）。
   release  build + upload 一步到位（zip 必传，桌面端 asar 作为额外资产传入）。
 
-代理：本机只能经本地代理访问 GitHub API，故调用 gh 前清空 NO_PROXY 并确保 HTTPS_PROXY。
+代理：实测沙箱内直连 GitHub 可达，但经本地代理(127.0.0.1:4608)会被 502 拦截。
+故调用 gh 前把 github 相关主机加入 NO_PROXY 并清空 HTTPS_PROXY，走直连。
 """
 import argparse
 import os
@@ -36,19 +37,43 @@ LEGACY_TEMPS = ["_zip_browser.py", "_upload_assets.py"]
 
 def _env():
     env = os.environ.copy()
-    env.pop("NO_PROXY", None)
-    env.pop("no_proxy", None)
-    if not env.get("HTTPS_PROXY") and not env.get("https_proxy"):
-        env["HTTPS_PROXY"] = "http://127.0.0.1:4608"
+    # 走直连：把 github 相关主机排除出代理，并清空 HTTPS_PROXY（否则经 4608 代理会 502）
+    no_proxy = "api.github.com,github.com,uploads.github.com,*.githubusercontent.com"
+    env["NO_PROXY"] = no_proxy
+    env["no_proxy"] = no_proxy
+    env.pop("HTTPS_PROXY", None)
+    env.pop("https_proxy", None)
     return env
 
 
-def build():
-    if not BROWSER_SRC.is_dir():
-        sys.exit(f"browser source dir not found: {BROWSER_SRC}")
-    missing = [f for f in BROWSER_FILES if not (BROWSER_SRC / f).is_file()]
+def sync_browser_src(force=True):
+    """从仓库根目录(ROOT)把 8 个浏览器扩展源文件覆盖同步到 BROWSER_SRC。
+
+    防回归：历史 BUG 因 BROWSER_SRC 内的 recent-tabs-core.js 落后两代（仍是 1.0.18），
+    打出的 browser.zip 版本号滞后。此处每次 build 先强制对齐 ROOT，杜绝漏同步。
+    """
+    BROWSER_SRC.mkdir(parents=True, exist_ok=True)
+    missing = [f for f in BROWSER_FILES if not (ROOT / f).is_file()]
     if missing:
-        sys.exit(f"missing source files: {missing}")
+        sys.exit(f"missing root source files: {missing}")
+    if not force:
+        return
+    synced = []
+    for f in BROWSER_FILES:
+        src = ROOT / f
+        dst = BROWSER_SRC / f
+        data = src.read_bytes()
+        if not dst.exists() or dst.read_bytes() != data:
+            dst.write_bytes(data)
+            synced.append(f)
+    if synced:
+        print(f"synced {len(synced)} file(s) root -> BROWSER_SRC: {synced}")
+    else:
+        print("browser src already in sync with root, nothing to copy")
+
+
+def build(no_sync=False):
+    sync_browser_src(force=not no_sync)
     if BROWSER_ZIP.exists():
         BROWSER_ZIP.unlink()
     with zipfile.ZipFile(BROWSER_ZIP, "w", zipfile.ZIP_DEFLATED) as z:
@@ -87,7 +112,9 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("build", help="pack browser extension zip")
+    b = sub.add_parser("build", help="sync 8 browser source files from ROOT then pack browser zip")
+    b.add_argument("--no-sync", action="store_true",
+                   help="skip syncing 8 browser source files from ROOT to BROWSER_SRC")
 
     up = sub.add_parser("upload", help="upload assets to a release")
     up.add_argument("--tag", required=True)
@@ -97,18 +124,20 @@ def main():
 
     rl = sub.add_parser("release", help="build zip then upload zip + extra assets")
     rl.add_argument("--tag", required=True)
+    rl.add_argument("--no-sync", action="store_true",
+                    help="skip syncing 8 browser source files from ROOT to BROWSER_SRC")
     rl.add_argument("assets", nargs="*", help="extra asset paths (e.g. desktop asar)")
 
     args = ap.parse_args()
 
     if args.cmd == "build":
-        build()
+        build(args.no_sync)
     elif args.cmd == "upload":
         upload(args.tag, args.assets)
     elif args.cmd == "clean":
         clean()
     elif args.cmd == "release":
-        zip_path = build()
+        zip_path = build(args.no_sync)
         upload(args.tag, [str(zip_path), *args.assets])
 
 
